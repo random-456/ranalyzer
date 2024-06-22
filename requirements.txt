@@ -2,3 +2,4 @@ flask
 praw
 python-dotenv
 openai
+uuid

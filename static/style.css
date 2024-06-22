@@ -1,3 +1,30 @@
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2980b9;
+    --background-color: #ffffff;
+    --text-color: #333333;
+}
+
+body {
+    font-family: 'Nunito', 'Helvetica Neue', 'Helvetica', sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+}
+
+.logo-text {
+    font-weight: bold;
+    font-size: 24px;
+    background-image: linear-gradient(60deg, var(--primary-color), var(--secondary-color));
+    -webkit-background-clip: text;
+    color: transparent;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.navbar {
+    background-color: var(--background-color);
+}
+
 .category {
     background-color: #f8f9fa;
     border-radius: 5px;

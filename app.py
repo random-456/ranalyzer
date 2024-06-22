@@ -1,12 +1,24 @@
-from flask import Flask, render_template, request, jsonify
-import praw
 import os
+from flask import Flask, render_template, request, jsonify, session
+import praw
 from openai import OpenAI
 from dotenv import load_dotenv
+import mysql.connector
+from mysql.connector import Error
+import uuid
 
 load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'fallback_secret_key')  # for session management
+
+# MySQL Configuration
+db_config = {
+    'host': os.getenv('MYSQL_HOST'),
+    'database': os.getenv('MYSQL_DBNAME'),
+    'user': os.getenv('MYSQL_USER'),
+    'password': os.getenv('MYSQL_PASSWORD')
+}
 
 reddit = praw.Reddit(
     client_id=os.getenv('REDDIT_CLIENT_ID'),
@@ -16,8 +28,36 @@ reddit = praw.Reddit(
 
 openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
 
+def create_db_connection():
+    try:
+        connection = mysql.connector.connect(**db_config)
+        if connection.is_connected():
+            return connection
+    except Error as e:
+        print(f"Error while connecting to MySQL: {e}")
+    return None
+
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO analysis_results 
+                       (user_id, topic, subreddit, post_id, post_title, analysis) 
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis))
+            connection.commit()
+        except Error as e:
+            print(f"Error while saving analysis: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
 @app.route('/')
 def index():
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())  # Generate a unique ID for the session
     return render_template('index.html')
 
 @app.route('/search_subreddits', methods=['POST'])
@@ -91,6 +131,10 @@ def get_posts():
 @app.route('/analyze_post', methods=['POST'])
 def analyze_post():
     post_id = request.json['post_id']
+    topic = request.json.get('topic', '')
+    subreddit = request.json.get('subreddit', '')
+    user_id = session.get('user_id', 'anonymous')
+    
     submission = reddit.submission(id=post_id)
     
     content = f"Title: {submission.title}\n\n"
@@ -108,7 +152,20 @@ def analyze_post():
     comments = [comment.body for comment in submission.comments.list()[:10]]
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
-    system_message = """You are an assistant that analyzes reddit posts and their comments in order to detect and understand potential problems that people have and derive business models from it. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you, and you need to evaluate if this is a potential problem which can be solved by a business model which can be launched by me. If it is not the case, you simply answer 'No potential business model detected'. You do not have to make up impractical ideas which make no sense but instead be strict and just refuse an answer if you do not see any potential business model. However, if you see a potential business model related to the content I provide you with, you will need to explain it very detailed."""
+    system_message = """You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
+
+Your task is to:
+1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
+2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea. Include:
+   - The problem or need identified
+   - The proposed solution
+   - The target market
+   - Potential revenue streams
+   - Any challenges or considerations for implementing this business model
+
+If you do not see any viable business opportunity, respond with 'No potential business model detected' and briefly explain why.
+
+Remember, only suggest practical and ethical business ideas. Do not invent or assume information not present in the provided content."""
 
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -118,6 +175,10 @@ def analyze_post():
         ]
     )
     analysis = completion.choices[0].message.content
+    
+    # Save the analysis to the database
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis)
+    
     return jsonify({'analysis': analysis})
 
 if __name__ == '__main__':

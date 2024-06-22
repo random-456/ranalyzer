@@ -1,3 +1,5 @@
+let currentTopic = '';
+
 function showLoading(elementId) {
     document.getElementById(elementId).innerHTML = '<div class="d-flex justify-content-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
 }
@@ -23,6 +25,7 @@ function closeAccordionItem(itemId) {
 }
 
 function searchSubreddits() {
+    currentTopic = document.getElementById('topicInput').value;
     const topic = document.getElementById('topicInput').value;
     showLoading('subredditList');
     openAccordionItem('collapseSubreddit');
@@ -95,7 +98,7 @@ function getPosts(subreddit) {
                         const button = document.createElement('button');
                         button.className = 'btn btn-outline-secondary item-button';
                         button.textContent = `[${postInfo.num_comments} comments] ${postInfo.title}`;
-                        button.onclick = () => analyzePost(post.id);
+                        button.onclick = () => analyzePost(post.id, currentTopic, subreddit);            
                         categoryDiv.appendChild(button);
                         const reason = document.createElement('p');
                         reason.className = 'item-reason';
@@ -110,21 +113,32 @@ function getPosts(subreddit) {
     .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
 }
 
-function analyzePost(postId) {
+function analyzePost(postId, topic, subreddit) {
+    console.log(`Analyzing post: ${postId}, Topic: ${topic}, Subreddit: ${subreddit}`);
     showLoading('analysisResult');
-    closeAccordionItem('collapsePost');
     
     fetch('/analyze_post', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({post_id: postId}),
+        body: JSON.stringify({
+            post_id: postId,
+            topic: topic,
+            subreddit: subreddit
+        }),
     })
-    .then(response => response.json())
+    .then(response => {
+        console.log('Response received:', response);
+        return response.json();
+    })
     .then(data => {
+        console.log('Analysis data:', data);
         const analysisResult = document.getElementById('analysisResult');
         analysisResult.innerHTML = '<h2 class="mb-3">Analysis:</h2><pre>' + data.analysis + '</pre>';
     })
-    .catch(error => showError('analysisResult', 'Failed to analyze post. Please try again.'));
+    .catch(error => {
+        console.error('Error during analysis:', error);
+        showError('analysisResult', 'Failed to analyze post. Please try again.');
+    });
 }
