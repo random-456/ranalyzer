@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reddit Business Analyzer</title>
+</head>
+<body>
+    <h1>Reddit Business Analyzer</h1>
+    
+    <div>
+        <input type="text" id="topicInput" placeholder="Enter a topic">
+        <button onclick="searchSubreddits()">Search Subreddits</button>
+    </div>
+
+    <div id="subredditList"></div>
+
+    <div id="postList"></div>
+
+    <div id="analysisResult"></div>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+flask
+praw
+python-dotenv
+openai
