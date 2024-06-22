@@ -4,21 +4,67 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Reddit Business Analyzer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
 </head>
 <body>
-    <h1>Reddit Business Analyzer</h1>
-    
-    <div>
-        <input type="text" id="topicInput" placeholder="Enter a topic">
-        <button onclick="searchSubreddits()">Search Subreddits</button>
+    <div class="container-fluid mt-3">
+        <h1 class="mb-4 text-center">Reddit Business Analyzer</h1>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="accordion" id="analyzerAccordion">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingTopic">
+                            <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTopic" aria-expanded="true" aria-controls="collapseTopic">
+                                1. Choose Topic
+                            </button>
+                        </h2>
+                        <div id="collapseTopic" class="accordion-collapse collapse show" aria-labelledby="headingTopic" data-bs-parent="#analyzerAccordion">
+                            <div class="accordion-body">
+                                <input type="text" id="topicInput" class="form-control mb-2" placeholder="Enter a topic">
+                                <button onclick="searchSubreddits()" class="btn btn-primary">Search Subreddits</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingSubreddit">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSubreddit" aria-expanded="false" aria-controls="collapseSubreddit">
+                                2. Choose Subreddit
+                            </button>
+                        </h2>
+                        <div id="collapseSubreddit" class="accordion-collapse collapse" aria-labelledby="headingSubreddit" data-bs-parent="#analyzerAccordion">
+                            <div class="accordion-body" id="subredditList">
+                                <!-- Subreddit list will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="headingPost">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapsePost" aria-expanded="false" aria-controls="collapsePost">
+                                3. Choose Post
+                            </button>
+                        </h2>
+                        <div id="collapsePost" class="accordion-collapse collapse" aria-labelledby="headingPost" data-bs-parent="#analyzerAccordion">
+                            <div class="accordion-body" id="postList">
+                                <!-- Post list will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div id="analysisResult" class="mt-3">
+                    <!-- Analysis result will be shown here -->
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div id="subredditList"></div>
-
-    <div id="postList"></div>
-
-    <div id="analysisResult"></div>
-
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
