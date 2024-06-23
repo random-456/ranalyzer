@@ -56,15 +56,27 @@ function searchSubreddits() {
                 categoryDiv.className = 'category';
                 categoryDiv.innerHTML = `<h3>${title}</h3>`;
                 analysis[key].forEach(sub => {
+                    const subInfo = data.subreddits.find(s => s.name === sub.name);
+                    const subDiv = document.createElement('div');
+                    subDiv.className = 'subreddit-item';
+                    
+                    const subscriberCount = document.createElement('p');
+                    subscriberCount.className = 'subscriber-count';
+                    subscriberCount.innerHTML = `<strong>${subInfo.subscribers.toLocaleString()}</strong> subscribers`;
+                    
                     const button = document.createElement('button');
-                    button.className = 'btn btn-outline-primary item-button';
+                    button.className = 'btn btn-outline-secondary item-button';
                     button.textContent = sub.name;
                     button.onclick = () => getPosts(sub.name);
-                    categoryDiv.appendChild(button);
+                    
                     const reason = document.createElement('p');
                     reason.className = 'item-reason';
                     reason.textContent = sub.reason;
-                    categoryDiv.appendChild(reason);
+                    
+                    subDiv.appendChild(subscriberCount);
+                    subDiv.appendChild(button);
+                    subDiv.appendChild(reason);
+                    categoryDiv.appendChild(subDiv);
                 });
                 subredditList.appendChild(categoryDiv);
             }
@@ -150,14 +162,15 @@ function analyzePost(postId) {
             subreddit: currentSubreddit
         }),
     })
-    .then(response => {
-        console.log('Response received:', response);
-        return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
-        console.log('Analysis data:', data);
         const analysisResult = document.getElementById('analysisResult');
         let formattedAnalysis = '<h2 class="mb-3">Analysis</h2>';
+        
+        // Add the Reddit post URL
+        const postUrl = `https://www.reddit.com/comments/${postId}`;
+        formattedAnalysis += `<p><strong>Original Post:</strong> <a href="${postUrl}" target="_blank">${postUrl}</a></p>`;
+
         
         try {
             const analysis = JSON.parse(data.analysis);

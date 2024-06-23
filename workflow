@@ -36,3 +36,9 @@ To-Do:
 - Can we have the url/link to the original reddit post under the analysis?
 - Can we make sure that the right part of the screen is always visible? I always want to see the analysis (if there is already one) and when scrolling through the posts on the left it should basically just scroll the entries but not the whole page. Do you see what I mean?
 - Above the subreddit proposals, can we display in strong/bold the number of user inside the subreddit? This information is probably available from the API, right?
+
+
+##########
+
+- Next to the first input field we need a button which opens a modal that contains a topic finder/generator. It makes a new request to the OpenAI API with a system message which explains what is the whole purpose of this and then mentions the users profile details, and asks for some cool niche keywords which might have potential for certain business models.
+- 

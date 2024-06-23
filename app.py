@@ -83,7 +83,11 @@ def index():
 def search_subreddits():
     topic = request.json['topic']
     subreddits = list(reddit.subreddits.search(topic, limit=10))
-    subreddit_info = [{'name': sub.display_name, 'description': sub.public_description} for sub in subreddits]
+    subreddit_info = [{
+        'name': sub.display_name,
+        'description': sub.public_description,
+        'subscribers': sub.subscribers
+    } for sub in subreddits]
     
     # Analyze subreddits with OpenAI
     system_message = """

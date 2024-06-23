@@ -36,11 +36,22 @@ body {
     margin-bottom: 15px;
 }
 
+.subreddit-item,
+.post-item {
+    margin-bottom: 15px;
+}
+
+.subscriber-count,
+.comment-count {
+    font-size: 0.8em;
+    margin-bottom: 5px;
+}
+
 .item-button {
     display: block;
     width: 100%;
     text-align: left;
-    margin-bottom: 10px;
+    margin-bottom: 5px;
 }
 
 .item-reason {
@@ -62,19 +73,6 @@ body {
     color: #0c63e4;
 }
 
-.post-item {
-    margin-bottom: 15px;
-}
-
-.comment-count {
-    font-size: 0.8em;
-    margin-bottom: 5px;
-}
-
-.item-button {
-    margin-bottom: 5px;
-}
-
 #analysisResult h2 {
     color: #333;
     border-bottom: 2px solid #3498db;
@@ -91,4 +89,16 @@ body {
 #analysisResult p {
     margin-bottom: 15px;
     line-height: 1.6;
+}
+
+.scrollable-column {
+    height: calc(100vh - 60px); /* Adjust 60px based on your navbar height */
+    overflow-y: auto;
+}
+
+.fixed-column {
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    position: sticky;
+    top: 60px; /* Adjust based on your navbar height */
 }
