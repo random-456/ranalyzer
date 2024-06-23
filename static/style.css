@@ -61,3 +61,34 @@ body {
     background-color: #e7f1ff;
     color: #0c63e4;
 }
+
+.post-item {
+    margin-bottom: 15px;
+}
+
+.comment-count {
+    font-size: 0.8em;
+    margin-bottom: 5px;
+}
+
+.item-button {
+    margin-bottom: 5px;
+}
+
+#analysisResult h2 {
+    color: #333;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+#analysisResult h3 {
+    color: #2c3e50;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+#analysisResult p {
+    margin-bottom: 15px;
+    line-height: 1.6;
+}

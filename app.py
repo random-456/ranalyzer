@@ -68,16 +68,16 @@ def search_subreddits():
     
     # Analyze subreddits with OpenAI
     system_message = """
-    You are an assistant that analyzes subreddits to determine their relevance to a given topic.
-    You will receive a topic and a list of subreddits with their descriptions.
-    Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Not relevant.
-    Provide your response in the following JSON format:
-    {
-        "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-        "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-        "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
-    }
-    """
+You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+You will receive a topic and a list of subreddits with their descriptions.
+Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+Provide your response in the following JSON format:
+{
+    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+}
+"""
     
     user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
     
@@ -106,14 +106,14 @@ def get_posts():
     
     # Analyze posts with OpenAI
     system_message = """
-    You are an assistant that analyzes Reddit post titles to determine their potential for containing business ideas.
-    You will receive a list of post titles. Your task is to categorize these posts into two groups: Maybe relevant and Not relevant.
-    Provide your response in the following JSON format:
-    {
-        "maybe_relevant": [{"id": "post_id", "reason": "brief explanation"}],
-        "not_relevant": [{"id": "post_id", "reason": "brief explanation"}]
-    }
-    """
+You are an assistant that analyzes Reddit post titles to determine their potential for containing business ideas.
+You will receive a list of post titles. Your task is to categorize these posts into two groups: Maybe relevant and Maybe less relevant.
+Provide your response in the following JSON format:
+{
+    "maybe_relevant": [{"id": "post_id", "reason": "brief explanation"}],
+    "not_relevant": [{"id": "post_id", "reason": "brief explanation"}]
+}
+"""
     
     user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
     
@@ -156,16 +156,24 @@ def analyze_post():
 
 Your task is to:
 1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
-2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea. Include:
-   - The problem or need identified
-   - The proposed solution
-   - The target market
-   - Potential revenue streams
-   - Any challenges or considerations for implementing this business model
+2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
+   {
+     "problem_identified": "Description of the problem or need",
+     "proposed_solution": "Detailed explanation of the proposed solution",
+     "target_market": "Description of the target market",
+     "potential_revenue_streams": "List of potential revenue streams",
+     "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
+     "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market"
+   }
 
-If you do not see any viable business opportunity, respond with 'No potential business model detected' and briefly explain why.
+If you do not see any viable business opportunity, respond with:
+{
+  "analysis": "No potential business model detected",
+  "reason": "Brief explanation why no viable opportunity was identified"
+}
 
 Remember, only suggest practical and ethical business ideas. Do not invent or assume information not present in the provided content."""
+
 
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",

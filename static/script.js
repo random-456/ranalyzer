@@ -26,7 +26,6 @@ function closeAccordionItem(itemId) {
 
 function searchSubreddits() {
     currentTopic = document.getElementById('topicInput').value;
-    const topic = document.getElementById('topicInput').value;
     showLoading('subredditList');
     openAccordionItem('collapseSubreddit');
     closeAccordionItem('collapseTopic');
@@ -36,7 +35,7 @@ function searchSubreddits() {
         headers: {
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({topic: topic}),
+        body: JSON.stringify({topic: currentTopic}),
     })
     .then(response => response.json())
     .then(data => {
@@ -45,12 +44,18 @@ function searchSubreddits() {
         
         const analysis = JSON.parse(data.analysis);
         
-        ['most_relevant', 'maybe_relevant', 'not_relevant'].forEach(category => {
-            if (analysis[category] && analysis[category].length > 0) {
+        const categories = {
+            'most_relevant': 'Most relevant',
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
                 const categoryDiv = document.createElement('div');
                 categoryDiv.className = 'category';
-                categoryDiv.innerHTML = `<h3>${category.replace('_', ' ').charAt(0).toUpperCase() + category.slice(1)}:</h3>`;
-                analysis[category].forEach(sub => {
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(sub => {
                     const button = document.createElement('button');
                     button.className = 'btn btn-outline-primary item-button';
                     button.textContent = sub.name;
@@ -69,6 +74,7 @@ function searchSubreddits() {
 }
 
 function getPosts(subreddit) {
+    currentSubreddit = subreddit;
     showLoading('postList');
     openAccordionItem('collapsePost');
     closeAccordionItem('collapseSubreddit');
@@ -87,23 +93,39 @@ function getPosts(subreddit) {
         
         const analysis = JSON.parse(data.analysis);
         
-        ['maybe_relevant', 'not_relevant'].forEach(category => {
-            if (analysis[category] && analysis[category].length > 0) {
+        const categories = {
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Maybe less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
                 const categoryDiv = document.createElement('div');
                 categoryDiv.className = 'category';
-                categoryDiv.innerHTML = `<h3>${category.replace('_', ' ').charAt(0).toUpperCase() + category.slice(1)}:</h3>`;
-                analysis[category].forEach(post => {
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(post => {
                     const postInfo = data.posts.find(p => p.id === post.id);
                     if (postInfo) {
+                        const postDiv = document.createElement('div');
+                        postDiv.className = 'post-item';
+                        
                         const button = document.createElement('button');
                         button.className = 'btn btn-outline-secondary item-button';
-                        button.textContent = `[${postInfo.num_comments} comments] ${postInfo.title}`;
-                        button.onclick = () => analyzePost(post.id, currentTopic, subreddit);            
-                        categoryDiv.appendChild(button);
+                        button.textContent = postInfo.title;
+                        button.onclick = () => analyzePost(post.id);
+                        
+                        const commentCount = document.createElement('p');
+                        commentCount.className = 'comment-count';
+                        commentCount.innerHTML = `<strong>${postInfo.num_comments}</strong> comments`;
+                        
                         const reason = document.createElement('p');
                         reason.className = 'item-reason';
                         reason.textContent = post.reason;
-                        categoryDiv.appendChild(reason);
+                        
+                        postDiv.appendChild(commentCount);
+                        postDiv.appendChild(button);
+                        postDiv.appendChild(reason);
+                        categoryDiv.appendChild(postDiv);
                     }
                 });
                 postList.appendChild(categoryDiv);
@@ -113,8 +135,8 @@ function getPosts(subreddit) {
     .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
 }
 
-function analyzePost(postId, topic, subreddit) {
-    console.log(`Analyzing post: ${postId}, Topic: ${topic}, Subreddit: ${subreddit}`);
+function analyzePost(postId) {
+    console.log(`Analyzing post: ${postId}, Topic: ${currentTopic}, Subreddit: ${currentSubreddit}`);
     showLoading('analysisResult');
     
     fetch('/analyze_post', {
@@ -124,8 +146,8 @@ function analyzePost(postId, topic, subreddit) {
         },
         body: JSON.stringify({
             post_id: postId,
-            topic: topic,
-            subreddit: subreddit
+            topic: currentTopic,
+            subreddit: currentSubreddit
         }),
     })
     .then(response => {
@@ -135,7 +157,36 @@ function analyzePost(postId, topic, subreddit) {
     .then(data => {
         console.log('Analysis data:', data);
         const analysisResult = document.getElementById('analysisResult');
-        analysisResult.innerHTML = '<h2 class="mb-3">Analysis:</h2><pre>' + data.analysis + '</pre>';
+        let formattedAnalysis = '<h2 class="mb-3">Analysis</h2>';
+        
+        try {
+            const analysis = JSON.parse(data.analysis);
+            if (analysis.analysis === "No potential business model detected") {
+                formattedAnalysis += `<p><strong>Result:</strong> ${analysis.analysis}</p>`;
+                formattedAnalysis += `<p><strong>Reason:</strong> ${analysis.reason}</p>`;
+            } else {
+                const sections = [
+                    { key: 'problem_identified', title: 'Problem Identified' },
+                    { key: 'proposed_solution', title: 'Proposed Solution' },
+                    { key: 'target_market', title: 'Target Market' },
+                    { key: 'potential_revenue_streams', title: 'Potential Revenue Streams' },
+                    { key: 'challenges_or_considerations', title: 'Challenges or Considerations' },
+                    { key: 'market_entry_difficulty', title: 'Market Entry Difficulty' }
+                ];
+
+                sections.forEach(section => {
+                    if (analysis[section.key]) {
+                        formattedAnalysis += `<h3>${section.title}</h3>`;
+                        formattedAnalysis += `<p>${analysis[section.key]}</p>`;
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error parsing analysis:', error);
+            formattedAnalysis += '<p>Error: Unable to parse analysis result.</p>';
+        }
+        
+        analysisResult.innerHTML = formattedAnalysis;
     })
     .catch(error => {
         console.error('Error during analysis:', error);
