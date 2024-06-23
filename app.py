@@ -54,6 +54,25 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis):
                 cursor.close()
                 connection.close()
 
+
+def get_user_profile_data(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return profile if profile else {}
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return {}
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return {}
+
 @app.route('/')
 def index():
     if 'user_id' not in session:
@@ -135,6 +154,8 @@ def analyze_post():
     subreddit = request.json.get('subreddit', '')
     user_id = session.get('user_id', 'anonymous')
     
+    user_profile = get_user_profile_data(user_id)
+
     submission = reddit.submission(id=post_id)
     
     content = f"Title: {submission.title}\n\n"
@@ -152,28 +173,35 @@ def analyze_post():
     comments = [comment.body for comment in submission.comments.list()[:10]]
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
-    system_message = """You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
+    system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
+
+User Profile:
+Educational Background: {user_profile.get('educational_background', 'Not specified')}
+Professional Experience: {user_profile.get('professional_experience', 'Not specified')}
+Skills: {user_profile.get('skills', 'Not specified')}
+Availability: {user_profile.get('availability', 'Not specified')}
+Other Criteria: {user_profile.get('other_criteria', 'Not specified')}
 
 Your task is to:
 1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
 2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
-   {
+   {{
      "problem_identified": "Description of the problem or need",
      "proposed_solution": "Detailed explanation of the proposed solution",
      "target_market": "Description of the target market",
      "potential_revenue_streams": "List of potential revenue streams",
      "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
-     "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market"
-   }
+     "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market",
+     "alignment_with_user_profile": "Explanation of how well this business idea aligns with the user's profile"
+   }}
 
 If you do not see any viable business opportunity, respond with:
-{
+{{
   "analysis": "No potential business model detected",
   "reason": "Brief explanation why no viable opportunity was identified"
-}
+}}
 
-Remember, only suggest practical and ethical business ideas. Do not invent or assume information not present in the provided content."""
-
+Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -188,6 +216,57 @@ Remember, only suggest practical and ethical business ideas. Do not invent or as
     save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis)
     
     return jsonify({'analysis': analysis})
+
+
+@app.route('/get_user_profile', methods=['GET'])
+def get_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return jsonify(profile if profile else {})
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return jsonify({"error": "Failed to fetch user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+@app.route('/save_user_profile', methods=['POST'])
+def save_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    profile_data = request.json
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO user_profiles 
+                       (user_id, educational_background, professional_experience, skills, availability, other_criteria) 
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                       educational_background = VALUES(educational_background),
+                       professional_experience = VALUES(professional_experience),
+                       skills = VALUES(skills),
+                       availability = VALUES(availability),
+                       other_criteria = VALUES(other_criteria)"""
+            cursor.execute(query, (user_id, profile_data['educational_background'], 
+                                   profile_data['professional_experience'], profile_data['skills'],
+                                   profile_data['availability'], profile_data['other_criteria']))
+            connection.commit()
+            return jsonify({"message": "Profile saved successfully"})
+        except Error as e:
+            print(f"Error while saving user profile: {e}")
+            return jsonify({"error": "Failed to save user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
 
 if __name__ == '__main__':
     app.run(debug=True)

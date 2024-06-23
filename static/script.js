@@ -193,3 +193,54 @@ function analyzePost(postId) {
         showError('analysisResult', 'Failed to analyze post. Please try again.');
     });
 }
+
+function loadUserProfile() {
+    fetch('/get_user_profile')
+        .then(response => response.json())
+        .then(data => {
+            if (data.educational_background) {
+                document.getElementById('educationalBackground').value = data.educational_background;
+                document.getElementById('professionalExperience').value = data.professional_experience;
+                document.getElementById('skills').value = data.skills;
+                document.getElementById('availability').value = data.availability;
+                document.getElementById('otherCriteria').value = data.other_criteria;
+            }
+        })
+        .catch(error => console.error('Error loading user profile:', error));
+}
+
+function saveUserProfile() {
+    const profileData = {
+        educational_background: document.getElementById('educationalBackground').value,
+        professional_experience: document.getElementById('professionalExperience').value,
+        skills: document.getElementById('skills').value,
+        availability: document.getElementById('availability').value,
+        other_criteria: document.getElementById('otherCriteria').value
+    };
+
+    fetch('/save_user_profile', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(profileData),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message) {
+            alert('Profile saved successfully!');
+            $('#userProfileModal').modal('hide');
+        } else {
+            alert('Failed to save profile. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error saving profile:', error);
+        alert('An error occurred while saving your profile.');
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadUserProfile();
+    document.getElementById('saveProfileButton').addEventListener('click', saveUserProfile);
+});

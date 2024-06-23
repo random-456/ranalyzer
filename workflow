@@ -28,4 +28,11 @@ To-Do:
     * professional experience (free text, e.g. IT Consulting + additional roles)
     * skills (free text, e.g. multiple programming language, wood working, home renovating, trading, event organization, consulting, coaching and much more)
     * Full time or side hustle or both possible (drop down menu)
-    * do you have other criteria in mind that could be set either by dropdown or free text field?
+    * do you have other criteria in mind that could be set either by dropdown or free text field
+
+
+##########
+
+- Can we have the url/link to the original reddit post under the analysis?
+- Can we make sure that the right part of the screen is always visible? I always want to see the analysis (if there is already one) and when scrolling through the posts on the left it should basically just scroll the entries but not the whole page. Do you see what I mean?
+- Above the subreddit proposals, can we display in strong/bold the number of user inside the subreddit? This information is probably available from the API, right?

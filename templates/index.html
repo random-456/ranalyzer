@@ -30,6 +30,9 @@
         <div class="row h-100">
             <div class="col-md-6">
                 <div class="accordion" id="analyzerAccordion">
+                    <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#userProfileModal">
+                        Edit Your Profile
+                    </button>
                     <div class="accordion-item">
                         <h2 class="accordion-header" id="headingTopic">
                             <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTopic" aria-expanded="true" aria-controls="collapseTopic">
@@ -77,6 +80,50 @@
                     <!-- Analysis result will be shown here -->
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div class="modal fade" id="userProfileModal" tabindex="-1" aria-labelledby="userProfileModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+            <h5 class="modal-title" id="userProfileModalLabel">Your Profile</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+            <form id="userProfileForm">
+                <div class="mb-3">
+                <label for="educationalBackground" class="form-label">Educational Background</label>
+                <input type="text" class="form-control" id="educationalBackground" required>
+                </div>
+                <div class="mb-3">
+                <label for="professionalExperience" class="form-label">Professional Experience</label>
+                <textarea class="form-control" id="professionalExperience" rows="3" required></textarea>
+                </div>
+                <div class="mb-3">
+                <label for="skills" class="form-label">Skills</label>
+                <textarea class="form-control" id="skills" rows="3" required></textarea>
+                </div>
+                <div class="mb-3">
+                <label for="availability" class="form-label">Availability</label>
+                <select class="form-select" id="availability" required>
+                    <option value="Full time">Full time</option>
+                    <option value="Side hustle">Side hustle</option>
+                    <option value="Both possible">Both possible</option>
+                </select>
+                </div>
+                <div class="mb-3">
+                <label for="otherCriteria" class="form-label">Other Criteria</label>
+                <textarea class="form-control" id="otherCriteria" rows="2"></textarea>
+                </div>
+            </form>
+            </div>
+            <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="button" class="btn btn-primary" id="saveProfileButton">Save Profile</button>
+            </div>
+        </div>
         </div>
     </div>
 
