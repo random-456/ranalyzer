@@ -38,15 +38,15 @@ def create_db_connection():
         print(f"Error while connecting to MySQL: {e}")
     return None
 
-def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis):
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title):
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
             query = """INSERT INTO analysis_results 
-                       (user_id, topic, subreddit, post_id, post_title, analysis) 
-                       VALUES (%s, %s, %s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis))
+                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title))
             connection.commit()
         except Error as e:
             print(f"Error while saving analysis: {e}")
@@ -180,33 +180,29 @@ def analyze_post():
 
     system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
 
-User Profile:
-Educational Background: {user_profile.get('educational_background', 'Not specified')}
-Professional Experience: {user_profile.get('professional_experience', 'Not specified')}
-Skills: {user_profile.get('skills', 'Not specified')}
-Availability: {user_profile.get('availability', 'Not specified')}
-Other Criteria: {user_profile.get('other_criteria', 'Not specified')}
+    Your task is to:
+    1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
+    2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
+       {{
+         "business_model_title": "A short, descriptive title for the business model (max 50 characters)",
+         "problem_identified": "Description of the problem or need",
+         "proposed_solution": "Detailed explanation of the proposed solution",
+         "target_market": "Description of the target market",
+         "potential_revenue_streams": "List of potential revenue streams",
+         "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
+         "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market",
+         "alignment_with_user_profile": "Explanation of how well this business idea aligns with the user's profile"
+       }}
 
-Your task is to:
-1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
-2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
-   {{
-     "problem_identified": "Description of the problem or need",
-     "proposed_solution": "Detailed explanation of the proposed solution",
-     "target_market": "Description of the target market",
-     "potential_revenue_streams": "List of potential revenue streams",
-     "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
-     "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market",
-     "alignment_with_user_profile": "Explanation of how well this business idea aligns with the user's profile"
-   }}
+    If you do not see any viable business opportunity, respond with:
+    {{
+      "business_model_title": "No viable business model",
+      "analysis": "No potential business model detected",
+      "reason": "Brief explanation why no viable opportunity was identified"
+    }}
 
-If you do not see any viable business opportunity, respond with:
-{{
-  "analysis": "No potential business model detected",
-  "reason": "Brief explanation why no viable opportunity was identified"
-}}
+    Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
-Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
@@ -217,8 +213,11 @@ Remember, only suggest practical and ethical business ideas that align with the 
     )
     analysis = completion.choices[0].message.content
     
+    analysis_json = json.loads(analysis)
+    business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+
     # Save the analysis to the database
-    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis)
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title)
     
     return jsonify({'analysis': analysis})
 
@@ -328,6 +327,35 @@ def generate_topics():
     except Exception as e:
         print(f"An error occurred: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+@app.route('/saved_analyses')
+def saved_analyses():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s 
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return render_template('saved_analyses.html', analyses=analyses)
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+            return jsonify({"error": "Failed to fetch saved analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
+
+
+@app.template_filter('from_json')
+def from_json(value):
+    return json.loads(value)
 
 
 if __name__ == '__main__':

@@ -261,7 +261,31 @@ document.addEventListener('DOMContentLoaded', function() {
     
     topicGeneratorModal = new bootstrap.Modal(document.getElementById('topicGeneratorModal'));
     document.getElementById('topicGeneratorBtn').addEventListener('click', generateTopics);
+    
 });
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const menuToggle = document.getElementById('menuToggle');
+    const menuDropdown = document.getElementById('menuDropdown');
+
+    menuToggle.addEventListener('click', function() {
+        if (menuDropdown.style.display === 'block') {
+            menuDropdown.style.display = 'none';
+        } else {
+            menuDropdown.style.display = 'block';
+        }
+    });
+
+    // Close the menu if clicked outside
+    document.addEventListener('click', function(event) {
+        if (!menuToggle.contains(event.target) && !menuDropdown.contains(event.target)) {
+            menuDropdown.style.display = 'none';
+        }
+    });
+});
+
+
 
 function generateTopics() {
     showLoading('generatedTopics');
