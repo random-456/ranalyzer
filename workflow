@@ -40,5 +40,5 @@ To-Do:
 
 ##########
 
-- Next to the first input field we need a button which opens a modal that contains a topic finder/generator. It makes a new request to the OpenAI API with a system message which explains what is the whole purpose of this and then mentions the users profile details, and asks for some cool niche keywords which might have potential for certain business models.
-- 
+- Next to the first input field we need a button which opens a modal that contains a topic finder/generator. It makes a new request to the OpenAI API with a system message which explains what is the whole purpose of this and then mentions the users profile details, and asks for some cool niche keywords which might have potential for certain business models. Keywords have to be provided in an aligned json format again which has to be requested in the system message. User can then select one of the proposed keywords and this is then written to the search box and the search event is triggered automatically as if we would have clicked the button, and the modal closes of course
+

@@ -253,7 +253,48 @@ function saveUserProfile() {
     });
 }
 
+let topicGeneratorModal;
+
 document.addEventListener('DOMContentLoaded', function() {
     loadUserProfile();
     document.getElementById('saveProfileButton').addEventListener('click', saveUserProfile);
+    
+    topicGeneratorModal = new bootstrap.Modal(document.getElementById('topicGeneratorModal'));
+    document.getElementById('topicGeneratorBtn').addEventListener('click', generateTopics);
 });
+
+function generateTopics() {
+    showLoading('generatedTopics');
+    topicGeneratorModal.show();
+
+    fetch('/generate_topics', {
+        method: 'GET'
+    })
+    .then(response => response.json())
+    .then(data => {
+        const topicsContainer = document.getElementById('generatedTopics');
+        topicsContainer.innerHTML = '<h4>Suggested Topics:</h4>';
+        const topicList = document.createElement('ul');
+        topicList.className = 'list-group';
+        
+        data.topics.forEach(topic => {
+            const listItem = document.createElement('li');
+            listItem.className = 'list-group-item list-group-item-action';
+            listItem.textContent = topic;
+            listItem.onclick = () => selectTopic(topic);
+            topicList.appendChild(listItem);
+        });
+        
+        topicsContainer.appendChild(topicList);
+    })
+    .catch(error => {
+        console.error('Error generating topics:', error);
+        showError('generatedTopics', 'Failed to generate topics. Please try again.');
+    });
+}
+
+function selectTopic(topic) {
+    document.getElementById('topicInput').value = topic;
+    topicGeneratorModal.hide();
+    searchSubreddits();
+}

@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import Error
 import uuid
+import json
 
 load_dotenv()
 
@@ -270,6 +271,63 @@ def save_user_profile():
             if connection.is_connected():
                 cursor.close()
                 connection.close()
+
+
+@app.route('/generate_topics', methods=['GET'])
+def generate_topics():
+    user_id = session.get('user_id', 'anonymous')
+    user_profile = get_user_profile_data(user_id)
+
+    system_message = f"""You are an assistant that generates general topic ideas for Reddit exploration, which could potentially lead to business model insights. 
+    Consider the user's profile:
+
+    Educational Background: {user_profile.get('educational_background', 'Not specified')}
+    Professional Experience: {user_profile.get('professional_experience', 'Not specified')}
+    Skills: {user_profile.get('skills', 'Not specified')}
+    Availability: {user_profile.get('availability', 'Not specified')}
+    Other Criteria: {user_profile.get('other_criteria', 'Not specified')}
+
+    Generate 10 unique general topic ideas that:
+    1. Are likely to have dedicated subreddits
+    2. Relate to everyday life, hobbies, interests, or common subjects
+    3. Could potentially lead to business ideas when explored further
+    4. Are tailored to the user's background and skills where possible
+
+    IMPORTANT:
+    - Each topic must be a single word, or at most two words if absolutely necessary
+    - Topics should be general and widely recognizable
+    - Avoid specialized jargon or overly niche terms
+    - Think of subjects that average people discuss or are interested in
+
+    Examples of good topics: fishing, cars, weddings, pets, cooking, fitness, travel, books, movies, gardening
+
+    Provide your response in the following JSON format:
+    {{
+        "topics": ["topic1", "topic2", "topic3", ...]
+    }}
+    Remember, each topic should be a single word where possible, and never more than two words."""
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": "Generate general topic ideas for Reddit exploration."}
+            ]
+        )
+
+        content = completion.choices[0].message.content
+        try:
+            topics = json.loads(content)
+            # Ensure topics are no more than 2 words
+            topics['topics'] = [' '.join(topic.split()[:2]) for topic in topics['topics']]
+            return jsonify(topics)
+        except ValueError as e:
+            print(f"Failed to parse JSON: {content}")
+            return jsonify({"error": "Failed to parse topics", "raw_content": content}), 500
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 
 if __name__ == '__main__':

@@ -40,7 +40,12 @@
                         </h2>
                         <div id="collapseTopic" class="accordion-collapse collapse show" aria-labelledby="headingTopic" data-bs-parent="#analyzerAccordion">
                             <div class="accordion-body">
-                                <input type="text" id="topicInput" class="form-control mb-2" placeholder="Enter a topic">
+                                <div class="input-group mb-3">
+                                    <input type="text" id="topicInput" class="form-control" placeholder="Enter a topic">
+                                    <button class="btn btn-outline-secondary" type="button" id="topicGeneratorBtn">
+                                        <i class="bi bi-lightbulb"></i> Generate Ideas
+                                    </button>
+                                </div>
                                 <button onclick="searchSubreddits()" class="btn btn-primary">Search Subreddits</button>
                             </div>
                         </div>
@@ -123,6 +128,21 @@
             <button type="button" class="btn btn-primary" id="saveProfileButton">Save Profile</button>
             </div>
         </div>
+        </div>
+    </div>
+
+    <!-- Topic Generator Modal -->
+    <div class="modal fade" id="topicGeneratorModal" tabindex="-1" aria-labelledby="topicGeneratorModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="topicGeneratorModalLabel">Topic Generator</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="generatedTopics"></div>
+                </div>
+            </div>
         </div>
     </div>
 

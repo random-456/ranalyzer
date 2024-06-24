@@ -102,3 +102,9 @@ body {
     position: sticky;
     top: 60px; /* Adjust based on your navbar height */
 }
+
+.list-group-item-action:hover {
+    background-color: var(--primary-color);
+    color: white;
+    cursor: pointer;
+}
