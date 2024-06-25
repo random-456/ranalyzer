@@ -1,6 +1,8 @@
 import os
+import time
 from flask import Flask, render_template, request, jsonify, session
 import praw
+from prawcore.exceptions import PrawcoreException
 from openai import OpenAI
 from dotenv import load_dotenv
 import mysql.connector
@@ -83,7 +85,12 @@ def index():
 @app.route('/search_subreddits', methods=['POST'])
 def search_subreddits():
     topic = request.json['topic']
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for the subreddit search
     subreddits = list(reddit.subreddits.search(topic, limit=10))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, "Search subreddits")
+    
     subreddit_info = [{
         'name': sub.display_name,
         'description': sub.public_description,
@@ -92,16 +99,16 @@ def search_subreddits():
     
     # Analyze subreddits with OpenAI
     system_message = """
-You are an assistant that analyzes subreddits to determine their relevance to a given topic.
-You will receive a topic and a list of subreddits with their descriptions.
-Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
-Provide your response in the following JSON format:
-{
-    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
-}
-"""
+    You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+    You will receive a topic and a list of subreddits with their descriptions.
+    Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+    Provide your response in the following JSON format:
+    {
+        "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+    }
+    """
     
     user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
     
@@ -113,13 +120,21 @@ Provide your response in the following JSON format:
         ]
     )
     
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze subreddits")
+    
     analysis = completion.choices[0].message.content
     return jsonify({'subreddits': subreddit_info, 'analysis': analysis})
 
 @app.route('/get_posts', methods=['POST'])
 def get_posts():
     subreddit_name = request.json['subreddit']
-    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))  # Fetch more to ensure we get 25 with comments
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for fetching hot posts
+    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Get posts from r/{subreddit_name}")
+    
     posts_with_comments = [post for post in posts if post.num_comments > 0][:25]
     
     post_info = [{
@@ -142,12 +157,14 @@ Provide your response in the following JSON format:
     user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
     
     completion = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    )
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_message}
+    ]
+)
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze posts")
     
     analysis = completion.choices[0].message.content
     return jsonify({'posts': post_info, 'analysis': analysis})
@@ -159,8 +176,7 @@ def analyze_post():
     subreddit = request.json.get('subreddit', '')
     user_id = session.get('user_id', 'anonymous')
     
-    user_profile = get_user_profile_data(user_id)
-
+    reddit_requests_count = 1  # Count for fetching the submission
     submission = reddit.submission(id=post_id)
     
     content = f"Title: {submission.title}\n\n"
@@ -175,7 +191,11 @@ def analyze_post():
         content += f"Content: This is a link post. Link: {submission.url}"
     
     submission.comments.replace_more(limit=None)
+    reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
+    
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
     system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
@@ -212,7 +232,8 @@ def analyze_post():
         ]
     )
     analysis = completion.choices[0].message.content
-    
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
     analysis_json = json.loads(analysis)
     business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
 
@@ -316,6 +337,9 @@ def generate_topics():
         )
 
         content = completion.choices[0].message.content
+        tokens_used = completion.usage.total_tokens
+        log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Generate topics")
+
         try:
             topics = json.loads(content)
             # Ensure topics are no more than 2 words
@@ -351,6 +375,24 @@ def saved_analyses():
                 cursor.close()
                 connection.close()
     return jsonify({"error": "Database connection failed"}), 500
+
+
+def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO api_request_logs 
+                       (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info) 
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info))
+            connection.commit()
+        except Error as e:
+            print(f"Error logging API request: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
 
 
 @app.template_filter('from_json')
