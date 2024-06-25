@@ -1,0 +1,2586 @@
+########## static/script.js ##########
+
+let currentTopic = '';
+
+function showLoading(elementId) {
+    document.getElementById(elementId).innerHTML = '<div class="d-flex justify-content-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+}
+
+function showError(elementId, message) {
+    document.getElementById(elementId).innerHTML = `<div class="alert alert-danger" role="alert">${message}</div>`;
+}
+
+function openAccordionItem(itemId) {
+    const accordionItem = document.querySelector(`#${itemId}`);
+    const bootstrapCollapse = new bootstrap.Collapse(accordionItem, {
+        toggle: false
+    });
+    bootstrapCollapse.show();
+}
+
+function closeAccordionItem(itemId) {
+    const accordionItem = document.querySelector(`#${itemId}`);
+    const bootstrapCollapse = new bootstrap.Collapse(accordionItem, {
+        toggle: false
+    });
+    bootstrapCollapse.hide();
+}
+
+function searchSubreddits() {
+    currentTopic = document.getElementById('topicInput').value;
+    showLoading('subredditList');
+    openAccordionItem('collapseSubreddit');
+    closeAccordionItem('collapseTopic');
+    
+    fetch('/search_subreddits', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({topic: currentTopic}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const subredditList = document.getElementById('subredditList');
+        subredditList.innerHTML = '';
+        
+        const analysis = JSON.parse(data.analysis);
+        
+        const categories = {
+            'most_relevant': 'Most relevant',
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category';
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(sub => {
+                    const subInfo = data.subreddits.find(s => s.name === sub.name);
+                    const subDiv = document.createElement('div');
+                    subDiv.className = 'subreddit-item';
+                    
+                    const subscriberCount = document.createElement('p');
+                    subscriberCount.className = 'subscriber-count';
+                    subscriberCount.innerHTML = `<strong>${subInfo.subscribers.toLocaleString()}</strong> subscribers`;
+                    
+                    const button = document.createElement('button');
+                    button.className = 'btn btn-outline-secondary item-button';
+                    button.textContent = sub.name;
+                    button.onclick = () => getPosts(sub.name);
+                    
+                    const reason = document.createElement('p');
+                    reason.className = 'item-reason';
+                    reason.textContent = sub.reason;
+                    
+                    subDiv.appendChild(subscriberCount);
+                    subDiv.appendChild(button);
+                    subDiv.appendChild(reason);
+                    categoryDiv.appendChild(subDiv);
+                });
+                subredditList.appendChild(categoryDiv);
+            }
+        });
+    })
+    .catch(error => showError('subredditList', 'Failed to fetch subreddits. Please try again.'));
+}
+
+function getPosts(subreddit) {
+    currentSubreddit = subreddit;
+    showLoading('postList');
+    openAccordionItem('collapsePost');
+    closeAccordionItem('collapseSubreddit');
+    
+    fetch('/get_posts', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({subreddit: subreddit}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const postList = document.getElementById('postList');
+        postList.innerHTML = '';
+        
+        const analysis = JSON.parse(data.analysis);
+        
+        const categories = {
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Maybe less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category';
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(post => {
+                    const postInfo = data.posts.find(p => p.id === post.id);
+                    if (postInfo) {
+                        const postDiv = document.createElement('div');
+                        postDiv.className = 'post-item';
+                        
+                        const button = document.createElement('button');
+                        button.className = 'btn btn-outline-secondary item-button';
+                        button.textContent = postInfo.title;
+                        button.onclick = () => analyzePost(post.id);
+                        
+                        const commentCount = document.createElement('p');
+                        commentCount.className = 'comment-count';
+                        commentCount.innerHTML = `<strong>${postInfo.num_comments}</strong> comments`;
+                        
+                        const reason = document.createElement('p');
+                        reason.className = 'item-reason';
+                        reason.textContent = post.reason;
+                        
+                        postDiv.appendChild(commentCount);
+                        postDiv.appendChild(button);
+                        postDiv.appendChild(reason);
+                        categoryDiv.appendChild(postDiv);
+                    }
+                });
+                postList.appendChild(categoryDiv);
+            }
+        });
+    })
+    .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
+}
+
+function analyzePost(postId) {
+    console.log(`Analyzing post: ${postId}, Topic: ${currentTopic}, Subreddit: ${currentSubreddit}`);
+    showLoading('analysisResult');
+    
+    fetch('/analyze_post', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            post_id: postId,
+            topic: currentTopic,
+            subreddit: currentSubreddit
+        }),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const analysisResult = document.getElementById('analysisResult');
+        let formattedAnalysis = '<h2 class="mb-3">Analysis</h2>';
+        
+        // Add the Reddit post URL
+        const postUrl = `https://www.reddit.com/comments/${postId}`;
+        formattedAnalysis += `<p><strong>Original Post:</strong> <a href="${postUrl}" target="_blank">${postUrl}</a></p>`;
+
+        
+        try {
+            const analysis = JSON.parse(data.analysis);
+            if (analysis.analysis === "No potential business model detected") {
+                formattedAnalysis += `<p><strong>Result:</strong> ${analysis.analysis}</p>`;
+                formattedAnalysis += `<p><strong>Reason:</strong> ${analysis.reason}</p>`;
+            } else {
+                const sections = [
+                    { key: 'problem_identified', title: 'Problem Identified' },
+                    { key: 'proposed_solution', title: 'Proposed Solution' },
+                    { key: 'target_market', title: 'Target Market' },
+                    { key: 'potential_revenue_streams', title: 'Potential Revenue Streams' },
+                    { key: 'challenges_or_considerations', title: 'Challenges or Considerations' },
+                    { key: 'market_entry_difficulty', title: 'Market Entry Difficulty' }
+                ];
+
+                sections.forEach(section => {
+                    if (analysis[section.key]) {
+                        formattedAnalysis += `<h3>${section.title}</h3>`;
+                        formattedAnalysis += `<p>${analysis[section.key]}</p>`;
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error parsing analysis:', error);
+            formattedAnalysis += '<p>Error: Unable to parse analysis result.</p>';
+        }
+        
+        analysisResult.innerHTML = formattedAnalysis;
+    })
+    .catch(error => {
+        console.error('Error during analysis:', error);
+        showError('analysisResult', 'Failed to analyze post. Please try again.');
+    });
+}
+
+function loadUserProfile() {
+    fetch('/get_user_profile')
+        .then(response => response.json())
+        .then(data => {
+            if (data.educational_background) {
+                document.getElementById('educationalBackground').value = data.educational_background;
+                document.getElementById('professionalExperience').value = data.professional_experience;
+                document.getElementById('skills').value = data.skills;
+                document.getElementById('availability').value = data.availability;
+                document.getElementById('otherCriteria').value = data.other_criteria;
+            }
+        })
+        .catch(error => console.error('Error loading user profile:', error));
+}
+
+function saveUserProfile() {
+    const profileData = {
+        educational_background: document.getElementById('educationalBackground').value,
+        professional_experience: document.getElementById('professionalExperience').value,
+        skills: document.getElementById('skills').value,
+        availability: document.getElementById('availability').value,
+        other_criteria: document.getElementById('otherCriteria').value
+    };
+
+    fetch('/save_user_profile', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(profileData),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message) {
+            alert('Profile saved successfully!');
+            $('#userProfileModal').modal('hide');
+        } else {
+            alert('Failed to save profile. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error saving profile:', error);
+        alert('An error occurred while saving your profile.');
+    });
+}
+
+let topicGeneratorModal;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadUserProfile();
+    document.getElementById('saveProfileButton').addEventListener('click', saveUserProfile);
+    
+    topicGeneratorModal = new bootstrap.Modal(document.getElementById('topicGeneratorModal'));
+    document.getElementById('topicGeneratorBtn').addEventListener('click', generateTopics);
+    
+});
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const menuToggle = document.getElementById('menuToggle');
+    const menuDropdown = document.getElementById('menuDropdown');
+
+    menuToggle.addEventListener('click', function() {
+        if (menuDropdown.style.display === 'block') {
+            menuDropdown.style.display = 'none';
+        } else {
+            menuDropdown.style.display = 'block';
+        }
+    });
+
+    // Close the menu if clicked outside
+    document.addEventListener('click', function(event) {
+        if (!menuToggle.contains(event.target) && !menuDropdown.contains(event.target)) {
+            menuDropdown.style.display = 'none';
+        }
+    });
+});
+
+
+
+function generateTopics() {
+    showLoading('generatedTopics');
+    topicGeneratorModal.show();
+
+    fetch('/generate_topics', {
+        method: 'GET'
+    })
+    .then(response => response.json())
+    .then(data => {
+        const topicsContainer = document.getElementById('generatedTopics');
+        topicsContainer.innerHTML = '<h4>Suggested Topics:</h4>';
+        const topicList = document.createElement('ul');
+        topicList.className = 'list-group';
+        
+        data.topics.forEach(topic => {
+            const listItem = document.createElement('li');
+            listItem.className = 'list-group-item list-group-item-action';
+            listItem.textContent = topic;
+            listItem.onclick = () => selectTopic(topic);
+            topicList.appendChild(listItem);
+        });
+        
+        topicsContainer.appendChild(topicList);
+    })
+    .catch(error => {
+        console.error('Error generating topics:', error);
+        showError('generatedTopics', 'Failed to generate topics. Please try again.');
+    });
+}
+
+function selectTopic(topic) {
+    document.getElementById('topicInput').value = topic;
+    topicGeneratorModal.hide();
+    searchSubreddits();
+}
+
+########## static/style.css ##########
+
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2980b9;
+    --background-color: #ffffff;
+    --text-color: #333333;
+    --gradient-highlight: linear-gradient(60deg, 
+        rgba(80, 115, 184, 0.1), 
+        rgba(16, 152, 173, 0.1), 
+        rgba(7, 179, 155, 0.1), 
+        rgba(111, 186, 130, 0.1));
+}
+
+body {
+    font-family: 'Nunito', 'Helvetica Neue', 'Helvetica', sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+}
+
+.logo-text {
+    font-weight: bold;
+    font-size: 24px;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 10px;
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    -webkit-background-clip: text;
+    color: transparent;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.navbar {
+    background-color: var(--background-color);
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.custom-toggler {
+    width: 40px;
+    height: 40px;
+    border: none;
+    background-color: var(--primary-color);
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+}
+
+.custom-toggler .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml;charset=utf8,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath stroke='rgba(255,255,255, 1)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 8h24M4 16h24M4 24h24'/%3E%3C/svg%3E");
+}
+
+.custom-toggler:focus {
+    box-shadow: none;
+}
+
+.navbar-nav {
+    background-color: var(--background-color);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.navbar-nav .nav-link {
+    color: var(--text-color);
+    font-weight: 600;
+    padding: 10px 15px;
+}
+
+.navbar-nav .nav-link:hover {
+    color: var(--primary-color);
+    background-color: rgba(52, 152, 219, 0.1);
+    border-radius: 5px;
+}
+
+@media (max-width: 991px) {
+    .navbar-collapse {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        width: 200px;
+        background-color: var(--background-color);
+        box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        z-index: 1000;
+    }
+}
+
+.navbar-toggler {
+    width: 40px;
+    height: 40px;
+    border: none;
+    background-color: var(--primary-color);
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    margin-left: auto;
+}
+
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 1)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+.navbar-collapse {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: white;
+    padding: 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+.navbar-nav {
+    flex-direction: column;
+}
+
+.navbar-nav .nav-link {
+    padding: 10px 20px;
+    white-space: nowrap;
+}
+
+@media (min-width: 992px) {
+    .navbar-collapse {
+        display: none !important;
+    }
+    
+    .navbar-toggler {
+        display: block !important;
+    }
+}
+
+#menuToggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    overflow: hidden;
+}
+
+#menuToggle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    z-index: 1;
+}
+
+#menuToggle .navbar-toggler-icon {
+    position: relative;
+    z-index: 2;
+    filter: brightness(0) invert(1);
+}
+
+#menuToggle:hover::before {
+    opacity: 0.8;
+}
+
+#menuToggle .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 1)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+.menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 60px;
+    right: 10px;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    z-index: 1000;
+}
+
+.menu-dropdown ul {
+    margin: 0;
+    padding: 0;
+}
+
+.menu-dropdown li {
+    margin-bottom: 10px;
+}
+
+.menu-dropdown a {
+    color: var(--text-color);
+    text-decoration: none;
+}
+
+.menu-dropdown a:hover {
+    color: var(--primary-color);
+}
+
+.category {
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.category h3 {
+    margin-bottom: 15px;
+}
+
+.subreddit-item,
+.post-item {
+    margin-bottom: 15px;
+}
+
+.subscriber-count,
+.comment-count {
+    font-size: 0.8em;
+    margin-bottom: 5px;
+}
+
+.item-button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    margin-bottom: 5px;
+}
+
+.item-reason {
+    font-size: 0.9em;
+    color: #6c757d;
+    margin-bottom: 15px;
+}
+
+#analysisResult pre {
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #e7f1ff;
+    color: #0c63e4;
+}
+
+#analysisResult h2 {
+    color: #333;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+#analysisResult h3 {
+    color: #2c3e50;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+#analysisResult p {
+    margin-bottom: 15px;
+    line-height: 1.6;
+}
+
+.scrollable-column {
+    height: calc(100vh - 60px); /* Adjust 60px based on your navbar height */
+    overflow-y: auto;
+}
+
+.fixed-column {
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    position: sticky;
+    top: 60px; /* Adjust based on your navbar height */
+}
+
+.list-group-item-action:hover {
+    background-image: var(--gradient-highlight);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.btn-primary {
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    border: none;
+    color: white;
+    transition: opacity 0.3s ease;
+}
+
+.btn-primary:hover {
+    opacity: 0.8;
+    color: white;
+}
+
+.accordion-button:not(.collapsed) {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.1), rgba(16, 152, 173, 0.1), rgba(7, 179, 155, 0.1), rgba(111, 186, 130, 0.1));
+    color: #333;
+}
+
+.accordion-button:hover {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.05), rgba(16, 152, 173, 0.05), rgba(7, 179, 155, 0.05), rgba(111, 186, 130, 0.05));
+}
+
+.gradient-highlight {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.1), rgba(16, 152, 173, 0.1), rgba(7, 179, 155, 0.1), rgba(111, 186, 130, 0.1));
+}
+
+.gradient-highlight:hover {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.2), rgba(16, 152, 173, 0.2), rgba(7, 179, 155, 0.2), rgba(111, 186, 130, 0.2));
+}
+
+.list-group-item-action:active,
+.list-group-item-action:focus {
+    background-image: linear-gradient(60deg, 
+        rgba(80, 115, 184, 0.2), 
+        rgba(16, 152, 173, 0.2), 
+        rgba(7, 179, 155, 0.2), 
+        rgba(111, 186, 130, 0.2));
+}
+
+.list-group-item-action {
+    transition: background-image 0.3s ease;
+}
+
+########## app.py ##########
+
+import os
+from flask import Flask, render_template, request, jsonify, session
+import praw
+from openai import OpenAI
+from dotenv import load_dotenv
+import mysql.connector
+from mysql.connector import Error
+import uuid
+import json
+
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'fallback_secret_key')  # for session management
+
+# MySQL Configuration
+db_config = {
+    'host': os.getenv('MYSQL_HOST'),
+    'database': os.getenv('MYSQL_DBNAME'),
+    'user': os.getenv('MYSQL_USER'),
+    'password': os.getenv('MYSQL_PASSWORD')
+}
+
+reddit = praw.Reddit(
+    client_id=os.getenv('REDDIT_CLIENT_ID'),
+    client_secret=os.getenv('REDDIT_CLIENT_SECRET'),
+    user_agent=os.getenv('REDDIT_USER_AGENT')
+)
+
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+def create_db_connection():
+    try:
+        connection = mysql.connector.connect(**db_config)
+        if connection.is_connected():
+            return connection
+    except Error as e:
+        print(f"Error while connecting to MySQL: {e}")
+    return None
+
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO analysis_results 
+                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title))
+            connection.commit()
+        except Error as e:
+            print(f"Error while saving analysis: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+def get_user_profile_data(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return profile if profile else {}
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return {}
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return {}
+
+@app.route('/')
+def index():
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())  # Generate a unique ID for the session
+    return render_template('index.html')
+
+@app.route('/search_subreddits', methods=['POST'])
+def search_subreddits():
+    topic = request.json['topic']
+    subreddits = list(reddit.subreddits.search(topic, limit=10))
+    subreddit_info = [{
+        'name': sub.display_name,
+        'description': sub.public_description,
+        'subscribers': sub.subscribers
+    } for sub in subreddits]
+    
+    # Analyze subreddits with OpenAI
+    system_message = """
+You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+You will receive a topic and a list of subreddits with their descriptions.
+Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+Provide your response in the following JSON format:
+{
+    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+}
+"""
+    
+    user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
+    
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    
+    analysis = completion.choices[0].message.content
+    return jsonify({'subreddits': subreddit_info, 'analysis': analysis})
+
+@app.route('/get_posts', methods=['POST'])
+def get_posts():
+    subreddit_name = request.json['subreddit']
+    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))  # Fetch more to ensure we get 25 with comments
+    posts_with_comments = [post for post in posts if post.num_comments > 0][:25]
+    
+    post_info = [{
+        'id': post.id,
+        'title': post.title,
+        'num_comments': post.num_comments
+    } for post in posts_with_comments]
+    
+    # Analyze posts with OpenAI
+    system_message = """
+You are an assistant that analyzes Reddit post titles to determine their potential for containing business ideas.
+You will receive a list of post titles. Your task is to categorize these posts into two groups: Maybe relevant and Maybe less relevant.
+Provide your response in the following JSON format:
+{
+    "maybe_relevant": [{"id": "post_id", "reason": "brief explanation"}],
+    "not_relevant": [{"id": "post_id", "reason": "brief explanation"}]
+}
+"""
+    
+    user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
+    
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    
+    analysis = completion.choices[0].message.content
+    return jsonify({'posts': post_info, 'analysis': analysis})
+
+@app.route('/analyze_post', methods=['POST'])
+def analyze_post():
+    post_id = request.json['post_id']
+    topic = request.json.get('topic', '')
+    subreddit = request.json.get('subreddit', '')
+    user_id = session.get('user_id', 'anonymous')
+    
+    user_profile = get_user_profile_data(user_id)
+
+    submission = reddit.submission(id=post_id)
+    
+    content = f"Title: {submission.title}\n\n"
+    
+    if submission.is_self:
+        content += f"Content: {submission.selftext}"
+    elif submission.is_video:
+        content += f"Content: This is a video post. Video URL: {submission.url}"
+    elif submission.url.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+        content += f"Content: This is an image post. Image URL: {submission.url}"
+    else:
+        content += f"Content: This is a link post. Link: {submission.url}"
+    
+    submission.comments.replace_more(limit=None)
+    comments = [comment.body for comment in submission.comments.list()[:10]]
+    full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
+
+    system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
+
+    Your task is to:
+    1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
+    2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
+       {{
+         "business_model_title": "A short, descriptive title for the business model (max 50 characters)",
+         "problem_identified": "Description of the problem or need",
+         "proposed_solution": "Detailed explanation of the proposed solution",
+         "target_market": "Description of the target market",
+         "potential_revenue_streams": "List of potential revenue streams",
+         "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
+         "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market",
+         "alignment_with_user_profile": "Explanation of how well this business idea aligns with the user's profile"
+       }}
+
+    If you do not see any viable business opportunity, respond with:
+    {{
+      "business_model_title": "No viable business model",
+      "analysis": "No potential business model detected",
+      "reason": "Brief explanation why no viable opportunity was identified"
+    }}
+
+    Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
+
+
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": full_content}
+        ]
+    )
+    analysis = completion.choices[0].message.content
+    
+    analysis_json = json.loads(analysis)
+    business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+
+    # Save the analysis to the database
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title)
+    
+    return jsonify({'analysis': analysis})
+
+
+@app.route('/get_user_profile', methods=['GET'])
+def get_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return jsonify(profile if profile else {})
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return jsonify({"error": "Failed to fetch user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+@app.route('/save_user_profile', methods=['POST'])
+def save_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    profile_data = request.json
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO user_profiles 
+                       (user_id, educational_background, professional_experience, skills, availability, other_criteria) 
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                       educational_background = VALUES(educational_background),
+                       professional_experience = VALUES(professional_experience),
+                       skills = VALUES(skills),
+                       availability = VALUES(availability),
+                       other_criteria = VALUES(other_criteria)"""
+            cursor.execute(query, (user_id, profile_data['educational_background'], 
+                                   profile_data['professional_experience'], profile_data['skills'],
+                                   profile_data['availability'], profile_data['other_criteria']))
+            connection.commit()
+            return jsonify({"message": "Profile saved successfully"})
+        except Error as e:
+            print(f"Error while saving user profile: {e}")
+            return jsonify({"error": "Failed to save user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+@app.route('/generate_topics', methods=['GET'])
+def generate_topics():
+    user_id = session.get('user_id', 'anonymous')
+    user_profile = get_user_profile_data(user_id)
+
+    system_message = f"""You are an assistant that generates general topic ideas for Reddit exploration, which could potentially lead to business model insights. 
+    Consider the user's profile:
+
+    Educational Background: {user_profile.get('educational_background', 'Not specified')}
+    Professional Experience: {user_profile.get('professional_experience', 'Not specified')}
+    Skills: {user_profile.get('skills', 'Not specified')}
+    Availability: {user_profile.get('availability', 'Not specified')}
+    Other Criteria: {user_profile.get('other_criteria', 'Not specified')}
+
+    Generate 10 unique general topic ideas that:
+    1. Are likely to have dedicated subreddits
+    2. Relate to everyday life, hobbies, interests, or common subjects
+    3. Could potentially lead to business ideas when explored further
+    4. Are tailored to the user's background and skills where possible
+
+    IMPORTANT:
+    - Each topic must be a single word, or at most two words if absolutely necessary
+    - Topics should be general and widely recognizable
+    - Avoid specialized jargon or overly niche terms
+    - Think of subjects that average people discuss or are interested in
+
+    Examples of good topics: fishing, cars, weddings, pets, cooking, fitness, travel, books, movies, gardening
+
+    Provide your response in the following JSON format:
+    {{
+        "topics": ["topic1", "topic2", "topic3", ...]
+    }}
+    Remember, each topic should be a single word where possible, and never more than two words."""
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": "Generate general topic ideas for Reddit exploration."}
+            ]
+        )
+
+        content = completion.choices[0].message.content
+        try:
+            topics = json.loads(content)
+            # Ensure topics are no more than 2 words
+            topics['topics'] = [' '.join(topic.split()[:2]) for topic in topics['topics']]
+            return jsonify(topics)
+        except ValueError as e:
+            print(f"Failed to parse JSON: {content}")
+            return jsonify({"error": "Failed to parse topics", "raw_content": content}), 500
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+@app.route('/saved_analyses')
+def saved_analyses():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s 
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return render_template('saved_analyses.html', analyses=analyses)
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+            return jsonify({"error": "Failed to fetch saved analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
+
+
+@app.template_filter('from_json')
+def from_json(value):
+    return json.loads(value)
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+########## templates/index.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid mt-3 flex-grow-1">
+    <div class="row h-100">
+        <div class="col-md-6 scrollable-column">
+            <div class="accordion" id="analyzerAccordion">
+                <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#userProfileModal">
+                    Edit Your Profile
+                </button>
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingTopic">
+                        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTopic" aria-expanded="true" aria-controls="collapseTopic">
+                            1. Choose Topic
+                        </button>
+                    </h2>
+                    <div id="collapseTopic" class="accordion-collapse collapse show" aria-labelledby="headingTopic" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body">
+                            <div class="input-group mb-3">
+                                <input type="text" id="topicInput" class="form-control" placeholder="Enter a topic">
+                                <button class="btn btn-outline-secondary" type="button" id="topicGeneratorBtn">
+                                    <i class="bi bi-lightbulb"></i> Generate Ideas
+                                </button>
+                            </div>
+                            <button onclick="searchSubreddits()" class="btn btn-primary">Search Subreddits</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingSubreddit">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSubreddit" aria-expanded="false" aria-controls="collapseSubreddit">
+                            2. Choose Subreddit
+                        </button>
+                    </h2>
+                    <div id="collapseSubreddit" class="accordion-collapse collapse" aria-labelledby="headingSubreddit" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body" id="subredditList">
+                            <!-- Subreddit list will be populated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingPost">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapsePost" aria-expanded="false" aria-controls="collapsePost">
+                            3. Choose Post
+                        </button>
+                    </h2>
+                    <div id="collapsePost" class="accordion-collapse collapse" aria-labelledby="headingPost" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body" id="postList">
+                            <!-- Post list will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6 fixed-column">
+            <div id="analysisResult" class="mt-3">
+                <!-- Analysis result will be shown here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- User Profile Modal -->
+<div class="modal fade" id="userProfileModal" tabindex="-1" aria-labelledby="userProfileModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userProfileModalLabel">Your Profile</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="userProfileForm">
+                    <div class="mb-3">
+                        <label for="educationalBackground" class="form-label">Educational Background</label>
+                        <input type="text" class="form-control" id="educationalBackground" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="professionalExperience" class="form-label">Professional Experience</label>
+                        <textarea class="form-control" id="professionalExperience" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="skills" class="form-label">Skills</label>
+                        <textarea class="form-control" id="skills" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="availability" class="form-label">Availability</label>
+                        <select class="form-select" id="availability" required>
+                            <option value="Full time">Full time</option>
+                            <option value="Side hustle">Side hustle</option>
+                            <option value="Both possible">Both possible</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="otherCriteria" class="form-label">Other Criteria</label>
+                        <textarea class="form-control" id="otherCriteria" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="saveProfileButton">Save Profile</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Topic Generator Modal -->
+<div class="modal fade" id="topicGeneratorModal" tabindex="-1" aria-labelledby="topicGeneratorModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="topicGeneratorModalLabel">Topic Generator</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="generatedTopics"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+########## templates/base.html ##########
+
+<!DOCTYPE html>
+<html lang="en" class="h-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Reddit Business Model Analyzer{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;800&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+    {% block extra_css %}{% endblock %}
+</head>
+<body class="h-100 d-flex flex-column">
+    <nav class="navbar navbar-light bg-light">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <span class="logo-text">REDDIT BUSINESS MODEL ANALYZER</span>
+            </a>
+            <button id="menuToggle" class="btn btn-primary menu-icon" aria-label="Toggle menu">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+        </div>
+    </nav>
+    
+    <div id="menuDropdown" class="menu-dropdown">
+        <ul class="list-unstyled">
+            <li><a href="/">Analyzer</a></li>
+            <li><a href="/saved_analyses">Saved Analyses</a></li>
+        </ul>
+    </div>
+
+    <div class="container-fluid mt-3 flex-grow-1">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
+
+########## templates/saved_analyses.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">Your Saved Analyses</h1>
+
+{% if analyses %}
+    <div class="list-group">
+    {% for analysis in analyses %}
+        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="modal" data-bs-target="#analysisModal{{ analysis.id }}">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
+                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <small>Subreddit: r/{{ analysis.subreddit }}</small>
+        </a>
+
+        <!-- Modal for each analysis -->
+        <div class="modal fade" id="analysisModal{{ analysis.id }}" tabindex="-1" aria-labelledby="analysisModalLabel{{ analysis.id }}" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="analysisModalLabel{{ analysis.id }}">{{ analysis.business_model_title }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <h6>Original Post: {{ analysis.post_title }}</h6>
+                        <p><strong>Topic:</strong> {{ analysis.topic }}</p>
+                        <p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
+                        <p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        <p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
+                        
+                        <h6 class="mt-4">Analysis:</h6>
+                        {% set analysis_data = analysis.analysis|from_json %}
+                        {% if analysis_data.problem_identified %}
+                            <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
+                            <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
+                            <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
+                            <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
+                            <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
+                            <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
+                            <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
+                        {% else %}
+                            <p>{{ analysis_data.analysis }}</p>
+                            <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endfor %}
+    </div>
+{% else %}
+    <p>No saved analyses found.</p>
+{% endif %}
+{% endblock %}
+
+########## flattened_project.txt ##########
+
+########## static/script.js ##########
+
+let currentTopic = '';
+
+function showLoading(elementId) {
+    document.getElementById(elementId).innerHTML = '<div class="d-flex justify-content-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div></div>';
+}
+
+function showError(elementId, message) {
+    document.getElementById(elementId).innerHTML = `<div class="alert alert-danger" role="alert">${message}</div>`;
+}
+
+function openAccordionItem(itemId) {
+    const accordionItem = document.querySelector(`#${itemId}`);
+    const bootstrapCollapse = new bootstrap.Collapse(accordionItem, {
+        toggle: false
+    });
+    bootstrapCollapse.show();
+}
+
+function closeAccordionItem(itemId) {
+    const accordionItem = document.querySelector(`#${itemId}`);
+    const bootstrapCollapse = new bootstrap.Collapse(accordionItem, {
+        toggle: false
+    });
+    bootstrapCollapse.hide();
+}
+
+function searchSubreddits() {
+    currentTopic = document.getElementById('topicInput').value;
+    showLoading('subredditList');
+    openAccordionItem('collapseSubreddit');
+    closeAccordionItem('collapseTopic');
+    
+    fetch('/search_subreddits', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({topic: currentTopic}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const subredditList = document.getElementById('subredditList');
+        subredditList.innerHTML = '';
+        
+        const analysis = JSON.parse(data.analysis);
+        
+        const categories = {
+            'most_relevant': 'Most relevant',
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category';
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(sub => {
+                    const subInfo = data.subreddits.find(s => s.name === sub.name);
+                    const subDiv = document.createElement('div');
+                    subDiv.className = 'subreddit-item';
+                    
+                    const subscriberCount = document.createElement('p');
+                    subscriberCount.className = 'subscriber-count';
+                    subscriberCount.innerHTML = `<strong>${subInfo.subscribers.toLocaleString()}</strong> subscribers`;
+                    
+                    const button = document.createElement('button');
+                    button.className = 'btn btn-outline-secondary item-button';
+                    button.textContent = sub.name;
+                    button.onclick = () => getPosts(sub.name);
+                    
+                    const reason = document.createElement('p');
+                    reason.className = 'item-reason';
+                    reason.textContent = sub.reason;
+                    
+                    subDiv.appendChild(subscriberCount);
+                    subDiv.appendChild(button);
+                    subDiv.appendChild(reason);
+                    categoryDiv.appendChild(subDiv);
+                });
+                subredditList.appendChild(categoryDiv);
+            }
+        });
+    })
+    .catch(error => showError('subredditList', 'Failed to fetch subreddits. Please try again.'));
+}
+
+function getPosts(subreddit) {
+    currentSubreddit = subreddit;
+    showLoading('postList');
+    openAccordionItem('collapsePost');
+    closeAccordionItem('collapseSubreddit');
+    
+    fetch('/get_posts', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({subreddit: subreddit}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const postList = document.getElementById('postList');
+        postList.innerHTML = '';
+        
+        const analysis = JSON.parse(data.analysis);
+        
+        const categories = {
+            'maybe_relevant': 'Maybe relevant',
+            'not_relevant': 'Maybe less relevant'
+        };
+        
+        Object.entries(categories).forEach(([key, title]) => {
+            if (analysis[key] && analysis[key].length > 0) {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category';
+                categoryDiv.innerHTML = `<h3>${title}</h3>`;
+                analysis[key].forEach(post => {
+                    const postInfo = data.posts.find(p => p.id === post.id);
+                    if (postInfo) {
+                        const postDiv = document.createElement('div');
+                        postDiv.className = 'post-item';
+                        
+                        const button = document.createElement('button');
+                        button.className = 'btn btn-outline-secondary item-button';
+                        button.textContent = postInfo.title;
+                        button.onclick = () => analyzePost(post.id);
+                        
+                        const commentCount = document.createElement('p');
+                        commentCount.className = 'comment-count';
+                        commentCount.innerHTML = `<strong>${postInfo.num_comments}</strong> comments`;
+                        
+                        const reason = document.createElement('p');
+                        reason.className = 'item-reason';
+                        reason.textContent = post.reason;
+                        
+                        postDiv.appendChild(commentCount);
+                        postDiv.appendChild(button);
+                        postDiv.appendChild(reason);
+                        categoryDiv.appendChild(postDiv);
+                    }
+                });
+                postList.appendChild(categoryDiv);
+            }
+        });
+    })
+    .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
+}
+
+function analyzePost(postId) {
+    console.log(`Analyzing post: ${postId}, Topic: ${currentTopic}, Subreddit: ${currentSubreddit}`);
+    showLoading('analysisResult');
+    
+    fetch('/analyze_post', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            post_id: postId,
+            topic: currentTopic,
+            subreddit: currentSubreddit
+        }),
+    })
+    .then(response => response.json())
+    .then(data => {
+        const analysisResult = document.getElementById('analysisResult');
+        let formattedAnalysis = '<h2 class="mb-3">Analysis</h2>';
+        
+        // Add the Reddit post URL
+        const postUrl = `https://www.reddit.com/comments/${postId}`;
+        formattedAnalysis += `<p><strong>Original Post:</strong> <a href="${postUrl}" target="_blank">${postUrl}</a></p>`;
+
+        
+        try {
+            const analysis = JSON.parse(data.analysis);
+            if (analysis.analysis === "No potential business model detected") {
+                formattedAnalysis += `<p><strong>Result:</strong> ${analysis.analysis}</p>`;
+                formattedAnalysis += `<p><strong>Reason:</strong> ${analysis.reason}</p>`;
+            } else {
+                const sections = [
+                    { key: 'problem_identified', title: 'Problem Identified' },
+                    { key: 'proposed_solution', title: 'Proposed Solution' },
+                    { key: 'target_market', title: 'Target Market' },
+                    { key: 'potential_revenue_streams', title: 'Potential Revenue Streams' },
+                    { key: 'challenges_or_considerations', title: 'Challenges or Considerations' },
+                    { key: 'market_entry_difficulty', title: 'Market Entry Difficulty' }
+                ];
+
+                sections.forEach(section => {
+                    if (analysis[section.key]) {
+                        formattedAnalysis += `<h3>${section.title}</h3>`;
+                        formattedAnalysis += `<p>${analysis[section.key]}</p>`;
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error parsing analysis:', error);
+            formattedAnalysis += '<p>Error: Unable to parse analysis result.</p>';
+        }
+        
+        analysisResult.innerHTML = formattedAnalysis;
+    })
+    .catch(error => {
+        console.error('Error during analysis:', error);
+        showError('analysisResult', 'Failed to analyze post. Please try again.');
+    });
+}
+
+function loadUserProfile() {
+    fetch('/get_user_profile')
+        .then(response => response.json())
+        .then(data => {
+            if (data.educational_background) {
+                document.getElementById('educationalBackground').value = data.educational_background;
+                document.getElementById('professionalExperience').value = data.professional_experience;
+                document.getElementById('skills').value = data.skills;
+                document.getElementById('availability').value = data.availability;
+                document.getElementById('otherCriteria').value = data.other_criteria;
+            }
+        })
+        .catch(error => console.error('Error loading user profile:', error));
+}
+
+function saveUserProfile() {
+    const profileData = {
+        educational_background: document.getElementById('educationalBackground').value,
+        professional_experience: document.getElementById('professionalExperience').value,
+        skills: document.getElementById('skills').value,
+        availability: document.getElementById('availability').value,
+        other_criteria: document.getElementById('otherCriteria').value
+    };
+
+    fetch('/save_user_profile', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(profileData),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.message) {
+            alert('Profile saved successfully!');
+            $('#userProfileModal').modal('hide');
+        } else {
+            alert('Failed to save profile. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error saving profile:', error);
+        alert('An error occurred while saving your profile.');
+    });
+}
+
+let topicGeneratorModal;
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadUserProfile();
+    document.getElementById('saveProfileButton').addEventListener('click', saveUserProfile);
+    
+    topicGeneratorModal = new bootstrap.Modal(document.getElementById('topicGeneratorModal'));
+    document.getElementById('topicGeneratorBtn').addEventListener('click', generateTopics);
+    
+});
+
+
+document.addEventListener('DOMContentLoaded', function() {
+    const menuToggle = document.getElementById('menuToggle');
+    const menuDropdown = document.getElementById('menuDropdown');
+
+    menuToggle.addEventListener('click', function() {
+        if (menuDropdown.style.display === 'block') {
+            menuDropdown.style.display = 'none';
+        } else {
+            menuDropdown.style.display = 'block';
+        }
+    });
+
+    // Close the menu if clicked outside
+    document.addEventListener('click', function(event) {
+        if (!menuToggle.contains(event.target) && !menuDropdown.contains(event.target)) {
+            menuDropdown.style.display = 'none';
+        }
+    });
+});
+
+
+
+function generateTopics() {
+    showLoading('generatedTopics');
+    topicGeneratorModal.show();
+
+    fetch('/generate_topics', {
+        method: 'GET'
+    })
+    .then(response => response.json())
+    .then(data => {
+        const topicsContainer = document.getElementById('generatedTopics');
+        topicsContainer.innerHTML = '<h4>Suggested Topics:</h4>';
+        const topicList = document.createElement('ul');
+        topicList.className = 'list-group';
+        
+        data.topics.forEach(topic => {
+            const listItem = document.createElement('li');
+            listItem.className = 'list-group-item list-group-item-action';
+            listItem.textContent = topic;
+            listItem.onclick = () => selectTopic(topic);
+            topicList.appendChild(listItem);
+        });
+        
+        topicsContainer.appendChild(topicList);
+    })
+    .catch(error => {
+        console.error('Error generating topics:', error);
+        showError('generatedTopics', 'Failed to generate topics. Please try again.');
+    });
+}
+
+function selectTopic(topic) {
+    document.getElementById('topicInput').value = topic;
+    topicGeneratorModal.hide();
+    searchSubreddits();
+}
+
+########## static/style.css ##########
+
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2980b9;
+    --background-color: #ffffff;
+    --text-color: #333333;
+    --gradient-highlight: linear-gradient(60deg, 
+        rgba(80, 115, 184, 0.1), 
+        rgba(16, 152, 173, 0.1), 
+        rgba(7, 179, 155, 0.1), 
+        rgba(111, 186, 130, 0.1));
+}
+
+body {
+    font-family: 'Nunito', 'Helvetica Neue', 'Helvetica', sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+}
+
+.logo-text {
+    font-weight: bold;
+    font-size: 24px;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 10px;
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    -webkit-background-clip: text;
+    color: transparent;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+.navbar {
+    background-color: var(--background-color);
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.custom-toggler {
+    width: 40px;
+    height: 40px;
+    border: none;
+    background-color: var(--primary-color);
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+}
+
+.custom-toggler .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml;charset=utf8,%3Csvg viewBox='0 0 32 32' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath stroke='rgba(255,255,255, 1)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 8h24M4 16h24M4 24h24'/%3E%3C/svg%3E");
+}
+
+.custom-toggler:focus {
+    box-shadow: none;
+}
+
+.navbar-nav {
+    background-color: var(--background-color);
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.navbar-nav .nav-link {
+    color: var(--text-color);
+    font-weight: 600;
+    padding: 10px 15px;
+}
+
+.navbar-nav .nav-link:hover {
+    color: var(--primary-color);
+    background-color: rgba(52, 152, 219, 0.1);
+    border-radius: 5px;
+}
+
+@media (max-width: 991px) {
+    .navbar-collapse {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        width: 200px;
+        background-color: var(--background-color);
+        box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        z-index: 1000;
+    }
+}
+
+.navbar-toggler {
+    width: 40px;
+    height: 40px;
+    border: none;
+    background-color: var(--primary-color);
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    margin-left: auto;
+}
+
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 1)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+.navbar-collapse {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background-color: white;
+    padding: 10px;
+    border-radius: 5px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+.navbar-nav {
+    flex-direction: column;
+}
+
+.navbar-nav .nav-link {
+    padding: 10px 20px;
+    white-space: nowrap;
+}
+
+@media (min-width: 992px) {
+    .navbar-collapse {
+        display: none !important;
+    }
+    
+    .navbar-toggler {
+        display: block !important;
+    }
+}
+
+#menuToggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    border: none;
+    border-radius: 5px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    overflow: hidden;
+}
+
+#menuToggle::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    z-index: 1;
+}
+
+#menuToggle .navbar-toggler-icon {
+    position: relative;
+    z-index: 2;
+    filter: brightness(0) invert(1);
+}
+
+#menuToggle:hover::before {
+    opacity: 0.8;
+}
+
+#menuToggle .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba(255, 255, 255, 1)' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e");
+}
+
+.menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 60px;
+    right: 10px;
+    background-color: white;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    z-index: 1000;
+}
+
+.menu-dropdown ul {
+    margin: 0;
+    padding: 0;
+}
+
+.menu-dropdown li {
+    margin-bottom: 10px;
+}
+
+.menu-dropdown a {
+    color: var(--text-color);
+    text-decoration: none;
+}
+
+.menu-dropdown a:hover {
+    color: var(--primary-color);
+}
+
+.category {
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 20px;
+}
+
+.category h3 {
+    margin-bottom: 15px;
+}
+
+.subreddit-item,
+.post-item {
+    margin-bottom: 15px;
+}
+
+.subscriber-count,
+.comment-count {
+    font-size: 0.8em;
+    margin-bottom: 5px;
+}
+
+.item-button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    margin-bottom: 5px;
+}
+
+.item-reason {
+    font-size: 0.9em;
+    color: #6c757d;
+    margin-bottom: 15px;
+}
+
+#analysisResult pre {
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #e7f1ff;
+    color: #0c63e4;
+}
+
+#analysisResult h2 {
+    color: #333;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+#analysisResult h3 {
+    color: #2c3e50;
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+#analysisResult p {
+    margin-bottom: 15px;
+    line-height: 1.6;
+}
+
+.scrollable-column {
+    height: calc(100vh - 60px); /* Adjust 60px based on your navbar height */
+    overflow-y: auto;
+}
+
+.fixed-column {
+    height: calc(100vh - 60px);
+    overflow-y: auto;
+    position: sticky;
+    top: 60px; /* Adjust based on your navbar height */
+}
+
+.list-group-item-action:hover {
+    background-image: var(--gradient-highlight);
+    color: var(--text-color);
+    cursor: pointer;
+}
+
+.btn-primary {
+    background-image: linear-gradient(60deg, #5073b8, #1098ad, #07b39b, #6fba82);
+    border: none;
+    color: white;
+    transition: opacity 0.3s ease;
+}
+
+.btn-primary:hover {
+    opacity: 0.8;
+    color: white;
+}
+
+.accordion-button:not(.collapsed) {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.1), rgba(16, 152, 173, 0.1), rgba(7, 179, 155, 0.1), rgba(111, 186, 130, 0.1));
+    color: #333;
+}
+
+.accordion-button:hover {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.05), rgba(16, 152, 173, 0.05), rgba(7, 179, 155, 0.05), rgba(111, 186, 130, 0.05));
+}
+
+.gradient-highlight {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.1), rgba(16, 152, 173, 0.1), rgba(7, 179, 155, 0.1), rgba(111, 186, 130, 0.1));
+}
+
+.gradient-highlight:hover {
+    background-image: linear-gradient(60deg, rgba(80, 115, 184, 0.2), rgba(16, 152, 173, 0.2), rgba(7, 179, 155, 0.2), rgba(111, 186, 130, 0.2));
+}
+
+.list-group-item-action:active,
+.list-group-item-action:focus {
+    background-image: linear-gradient(60deg, 
+        rgba(80, 115, 184, 0.2), 
+        rgba(16, 152, 173, 0.2), 
+        rgba(7, 179, 155, 0.2), 
+        rgba(111, 186, 130, 0.2));
+}
+
+.list-group-item-action {
+    transition: background-image 0.3s ease;
+}
+
+########## app.py ##########
+
+import os
+from flask import Flask, render_template, request, jsonify, session
+import praw
+from openai import OpenAI
+from dotenv import load_dotenv
+import mysql.connector
+from mysql.connector import Error
+import uuid
+import json
+
+load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'fallback_secret_key')  # for session management
+
+# MySQL Configuration
+db_config = {
+    'host': os.getenv('MYSQL_HOST'),
+    'database': os.getenv('MYSQL_DBNAME'),
+    'user': os.getenv('MYSQL_USER'),
+    'password': os.getenv('MYSQL_PASSWORD')
+}
+
+reddit = praw.Reddit(
+    client_id=os.getenv('REDDIT_CLIENT_ID'),
+    client_secret=os.getenv('REDDIT_CLIENT_SECRET'),
+    user_agent=os.getenv('REDDIT_USER_AGENT')
+)
+
+openai_client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+def create_db_connection():
+    try:
+        connection = mysql.connector.connect(**db_config)
+        if connection.is_connected():
+            return connection
+    except Error as e:
+        print(f"Error while connecting to MySQL: {e}")
+    return None
+
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO analysis_results 
+                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title))
+            connection.commit()
+        except Error as e:
+            print(f"Error while saving analysis: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+def get_user_profile_data(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return profile if profile else {}
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return {}
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return {}
+
+@app.route('/')
+def index():
+    if 'user_id' not in session:
+        session['user_id'] = str(uuid.uuid4())  # Generate a unique ID for the session
+    return render_template('index.html')
+
+@app.route('/search_subreddits', methods=['POST'])
+def search_subreddits():
+    topic = request.json['topic']
+    subreddits = list(reddit.subreddits.search(topic, limit=10))
+    subreddit_info = [{
+        'name': sub.display_name,
+        'description': sub.public_description,
+        'subscribers': sub.subscribers
+    } for sub in subreddits]
+    
+    # Analyze subreddits with OpenAI
+    system_message = """
+You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+You will receive a topic and a list of subreddits with their descriptions.
+Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+Provide your response in the following JSON format:
+{
+    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+}
+"""
+    
+    user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
+    
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    
+    analysis = completion.choices[0].message.content
+    return jsonify({'subreddits': subreddit_info, 'analysis': analysis})
+
+@app.route('/get_posts', methods=['POST'])
+def get_posts():
+    subreddit_name = request.json['subreddit']
+    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))  # Fetch more to ensure we get 25 with comments
+    posts_with_comments = [post for post in posts if post.num_comments > 0][:25]
+    
+    post_info = [{
+        'id': post.id,
+        'title': post.title,
+        'num_comments': post.num_comments
+    } for post in posts_with_comments]
+    
+    # Analyze posts with OpenAI
+    system_message = """
+You are an assistant that analyzes Reddit post titles to determine their potential for containing business ideas.
+You will receive a list of post titles. Your task is to categorize these posts into two groups: Maybe relevant and Maybe less relevant.
+Provide your response in the following JSON format:
+{
+    "maybe_relevant": [{"id": "post_id", "reason": "brief explanation"}],
+    "not_relevant": [{"id": "post_id", "reason": "brief explanation"}]
+}
+"""
+    
+    user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
+    
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
+    )
+    
+    analysis = completion.choices[0].message.content
+    return jsonify({'posts': post_info, 'analysis': analysis})
+
+@app.route('/analyze_post', methods=['POST'])
+def analyze_post():
+    post_id = request.json['post_id']
+    topic = request.json.get('topic', '')
+    subreddit = request.json.get('subreddit', '')
+    user_id = session.get('user_id', 'anonymous')
+    
+    user_profile = get_user_profile_data(user_id)
+
+    submission = reddit.submission(id=post_id)
+    
+    content = f"Title: {submission.title}\n\n"
+    
+    if submission.is_self:
+        content += f"Content: {submission.selftext}"
+    elif submission.is_video:
+        content += f"Content: This is a video post. Video URL: {submission.url}"
+    elif submission.url.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+        content += f"Content: This is an image post. Image URL: {submission.url}"
+    else:
+        content += f"Content: This is a link post. Link: {submission.url}"
+    
+    submission.comments.replace_more(limit=None)
+    comments = [comment.body for comment in submission.comments.list()[:10]]
+    full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
+
+    system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
+
+    Your task is to:
+    1. Evaluate if there is a potential problem or need expressed in the post or comments that could be addressed by a business model.
+    2. If you detect a potential business opportunity, you MUST provide a detailed explanation of the business model idea in the following JSON format:
+       {{
+         "business_model_title": "A short, descriptive title for the business model (max 50 characters)",
+         "problem_identified": "Description of the problem or need",
+         "proposed_solution": "Detailed explanation of the proposed solution",
+         "target_market": "Description of the target market",
+         "potential_revenue_streams": "List of potential revenue streams",
+         "challenges_or_considerations": "List of challenges or considerations for implementing this business model",
+         "market_entry_difficulty": "Assessment of how easy or hard it is to develop a product and enter the market",
+         "alignment_with_user_profile": "Explanation of how well this business idea aligns with the user's profile"
+       }}
+
+    If you do not see any viable business opportunity, respond with:
+    {{
+      "business_model_title": "No viable business model",
+      "analysis": "No potential business model detected",
+      "reason": "Brief explanation why no viable opportunity was identified"
+    }}
+
+    Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
+
+
+    completion = openai_client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": full_content}
+        ]
+    )
+    analysis = completion.choices[0].message.content
+    
+    analysis_json = json.loads(analysis)
+    business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+
+    # Save the analysis to the database
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title)
+    
+    return jsonify({'analysis': analysis})
+
+
+@app.route('/get_user_profile', methods=['GET'])
+def get_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM user_profiles WHERE user_id = %s"
+            cursor.execute(query, (user_id,))
+            profile = cursor.fetchone()
+            return jsonify(profile if profile else {})
+        except Error as e:
+            print(f"Error while fetching user profile: {e}")
+            return jsonify({"error": "Failed to fetch user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+@app.route('/save_user_profile', methods=['POST'])
+def save_user_profile():
+    user_id = session.get('user_id', 'anonymous')
+    profile_data = request.json
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO user_profiles 
+                       (user_id, educational_background, professional_experience, skills, availability, other_criteria) 
+                       VALUES (%s, %s, %s, %s, %s, %s)
+                       ON DUPLICATE KEY UPDATE
+                       educational_background = VALUES(educational_background),
+                       professional_experience = VALUES(professional_experience),
+                       skills = VALUES(skills),
+                       availability = VALUES(availability),
+                       other_criteria = VALUES(other_criteria)"""
+            cursor.execute(query, (user_id, profile_data['educational_background'], 
+                                   profile_data['professional_experience'], profile_data['skills'],
+                                   profile_data['availability'], profile_data['other_criteria']))
+            connection.commit()
+            return jsonify({"message": "Profile saved successfully"})
+        except Error as e:
+            print(f"Error while saving user profile: {e}")
+            return jsonify({"error": "Failed to save user profile"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+@app.route('/generate_topics', methods=['GET'])
+def generate_topics():
+    user_id = session.get('user_id', 'anonymous')
+    user_profile = get_user_profile_data(user_id)
+
+    system_message = f"""You are an assistant that generates general topic ideas for Reddit exploration, which could potentially lead to business model insights. 
+    Consider the user's profile:
+
+    Educational Background: {user_profile.get('educational_background', 'Not specified')}
+    Professional Experience: {user_profile.get('professional_experience', 'Not specified')}
+    Skills: {user_profile.get('skills', 'Not specified')}
+    Availability: {user_profile.get('availability', 'Not specified')}
+    Other Criteria: {user_profile.get('other_criteria', 'Not specified')}
+
+    Generate 10 unique general topic ideas that:
+    1. Are likely to have dedicated subreddits
+    2. Relate to everyday life, hobbies, interests, or common subjects
+    3. Could potentially lead to business ideas when explored further
+    4. Are tailored to the user's background and skills where possible
+
+    IMPORTANT:
+    - Each topic must be a single word, or at most two words if absolutely necessary
+    - Topics should be general and widely recognizable
+    - Avoid specialized jargon or overly niche terms
+    - Think of subjects that average people discuss or are interested in
+
+    Examples of good topics: fishing, cars, weddings, pets, cooking, fitness, travel, books, movies, gardening
+
+    Provide your response in the following JSON format:
+    {{
+        "topics": ["topic1", "topic2", "topic3", ...]
+    }}
+    Remember, each topic should be a single word where possible, and never more than two words."""
+
+    try:
+        completion = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": "Generate general topic ideas for Reddit exploration."}
+            ]
+        )
+
+        content = completion.choices[0].message.content
+        try:
+            topics = json.loads(content)
+            # Ensure topics are no more than 2 words
+            topics['topics'] = [' '.join(topic.split()[:2]) for topic in topics['topics']]
+            return jsonify(topics)
+        except ValueError as e:
+            print(f"Failed to parse JSON: {content}")
+            return jsonify({"error": "Failed to parse topics", "raw_content": content}), 500
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+@app.route('/saved_analyses')
+def saved_analyses():
+    user_id = session.get('user_id', 'anonymous')
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s 
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return render_template('saved_analyses.html', analyses=analyses)
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+            return jsonify({"error": "Failed to fetch saved analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
+
+
+@app.template_filter('from_json')
+def from_json(value):
+    return json.loads(value)
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+########## templates/index.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid mt-3 flex-grow-1">
+    <div class="row h-100">
+        <div class="col-md-6 scrollable-column">
+            <div class="accordion" id="analyzerAccordion">
+                <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#userProfileModal">
+                    Edit Your Profile
+                </button>
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingTopic">
+                        <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#collapseTopic" aria-expanded="true" aria-controls="collapseTopic">
+                            1. Choose Topic
+                        </button>
+                    </h2>
+                    <div id="collapseTopic" class="accordion-collapse collapse show" aria-labelledby="headingTopic" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body">
+                            <div class="input-group mb-3">
+                                <input type="text" id="topicInput" class="form-control" placeholder="Enter a topic">
+                                <button class="btn btn-outline-secondary" type="button" id="topicGeneratorBtn">
+                                    <i class="bi bi-lightbulb"></i> Generate Ideas
+                                </button>
+                            </div>
+                            <button onclick="searchSubreddits()" class="btn btn-primary">Search Subreddits</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingSubreddit">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSubreddit" aria-expanded="false" aria-controls="collapseSubreddit">
+                            2. Choose Subreddit
+                        </button>
+                    </h2>
+                    <div id="collapseSubreddit" class="accordion-collapse collapse" aria-labelledby="headingSubreddit" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body" id="subredditList">
+                            <!-- Subreddit list will be populated here -->
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingPost">
+                        <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapsePost" aria-expanded="false" aria-controls="collapsePost">
+                            3. Choose Post
+                        </button>
+                    </h2>
+                    <div id="collapsePost" class="accordion-collapse collapse" aria-labelledby="headingPost" data-bs-parent="#analyzerAccordion">
+                        <div class="accordion-body" id="postList">
+                            <!-- Post list will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-6 fixed-column">
+            <div id="analysisResult" class="mt-3">
+                <!-- Analysis result will be shown here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- User Profile Modal -->
+<div class="modal fade" id="userProfileModal" tabindex="-1" aria-labelledby="userProfileModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="userProfileModalLabel">Your Profile</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="userProfileForm">
+                    <div class="mb-3">
+                        <label for="educationalBackground" class="form-label">Educational Background</label>
+                        <input type="text" class="form-control" id="educationalBackground" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="professionalExperience" class="form-label">Professional Experience</label>
+                        <textarea class="form-control" id="professionalExperience" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="skills" class="form-label">Skills</label>
+                        <textarea class="form-control" id="skills" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="availability" class="form-label">Availability</label>
+                        <select class="form-select" id="availability" required>
+                            <option value="Full time">Full time</option>
+                            <option value="Side hustle">Side hustle</option>
+                            <option value="Both possible">Both possible</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="otherCriteria" class="form-label">Other Criteria</label>
+                        <textarea class="form-control" id="otherCriteria" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="saveProfileButton">Save Profile</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Topic Generator Modal -->
+<div class="modal fade" id="topicGeneratorModal" tabindex="-1" aria-labelledby="topicGeneratorModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="topicGeneratorModalLabel">Topic Generator</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="generatedTopics"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+########## templates/base.html ##########
+
+<!DOCTYPE html>
+<html lang="en" class="h-100">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Reddit Business Model Analyzer{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;800&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+    {% block extra_css %}{% endblock %}
+</head>
+<body class="h-100 d-flex flex-column">
+    <nav class="navbar navbar-light bg-light">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <span class="logo-text">REDDIT BUSINESS MODEL ANALYZER</span>
+            </a>
+            <button id="menuToggle" class="btn btn-primary menu-icon" aria-label="Toggle menu">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+        </div>
+    </nav>
+    
+    <div id="menuDropdown" class="menu-dropdown">
+        <ul class="list-unstyled">
+            <li><a href="/">Analyzer</a></li>
+            <li><a href="/saved_analyses">Saved Analyses</a></li>
+        </ul>
+    </div>
+
+    <div class="container-fluid mt-3 flex-grow-1">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
+
+########## templates/saved_analyses.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">Your Saved Analyses</h1>
+
+{% if analyses %}
+    <div class="list-group">
+    {% for analysis in analyses %}
+        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="modal" data-bs-target="#analysisModal{{ analysis.id }}">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
+                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <small>Subreddit: r/{{ analysis.subreddit }}</small>
+        </a>
+
+        <!-- Modal for each analysis -->
+        <div class="modal fade" id="analysisModal{{ analysis.id }}" tabindex="-1" aria-labelledby="analysisModalLabel{{ analysis.id }}" aria-hidden="true">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="analysisModalLabel{{ analysis.id }}">{{ analysis.business_model_title }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <h6>Original Post: {{ analysis.post_title }}</h6>
+                        <p><strong>Topic:</strong> {{ analysis.topic }}</p>
+                        <p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
+                        <p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                        <p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
+                        
+                        <h6 class="mt-4">Analysis:</h6>
+                        {% set analysis_data = analysis.analysis|from_json %}
+                        {% if analysis_data.problem_identified %}
+                            <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
+                            <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
+                            <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
+                            <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
+                            <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
+                            <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
+                            <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
+                        {% else %}
+                            <p>{{ analysis_data.analysis }}</p>
+                            <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    {% endfor %}
+    </div>
+{% else %}
+    <p>No saved analyses found.</p>
+{% endif %}
+{% endblock %}
+
+
+
+########## datamodel/240625_model.sql ##########
+
+-- phpMyAdmin SQL Dump
+-- version 5.2.1
+-- https://www.phpmyadmin.net/
+--
+-- Host: localhost:3306
+-- Erstellungszeit: 25. Jun 2024 um 08:10
+-- Server-Version: 10.5.23-MariaDB-0+deb11u1
+-- PHP-Version: 8.3.6
+
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
+
+--
+-- Datenbank: `redditanalyzer`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Tabellenstruktur für Tabelle `analysis_results`
+--
+
+CREATE TABLE `analysis_results` (
+  `id` int(11) NOT NULL,
+  `user_id` varchar(255) DEFAULT NULL,
+  `topic` varchar(255) DEFAULT NULL,
+  `subreddit` varchar(255) DEFAULT NULL,
+  `post_id` varchar(255) DEFAULT NULL,
+  `post_title` text DEFAULT NULL,
+  `analysis` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `business_model_title` varchar(255) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Tabellenstruktur für Tabelle `user_profiles`
+--
+
+CREATE TABLE `user_profiles` (
+  `user_id` varchar(255) NOT NULL,
+  `educational_background` text DEFAULT NULL,
+  `professional_experience` text DEFAULT NULL,
+  `skills` text DEFAULT NULL,
+  `availability` enum('Full time','Side hustle','Both possible') DEFAULT NULL,
+  `other_criteria` text DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
+
+--
+-- Indizes der exportierten Tabellen
+--
+
+--
+-- Indizes für die Tabelle `analysis_results`
+--
+ALTER TABLE `analysis_results`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indizes für die Tabelle `user_profiles`
+--
+ALTER TABLE `user_profiles`
+  ADD PRIMARY KEY (`user_id`);
+
+--
+-- AUTO_INCREMENT für exportierte Tabellen
+--
+
+--
+-- AUTO_INCREMENT für Tabelle `analysis_results`
+--
+ALTER TABLE `analysis_results`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+COMMIT;
+
+
