@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Job Results</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Post Title</th>
+            <th>Business Model</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for analysis in analyses %}
+        <tr>
+            <td>{{ analysis.post_title }}</td>
+            <td>{{ analysis.business_model_title }}</td>
+            <td>
+                <button class="btn btn-primary view-analysis" data-analysis-id="{{ analysis.id }}">View Analysis</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- Analysis Modal -->
+<div class="modal fade" id="analysisModal" tabindex="-1" aria-labelledby="analysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="analysisModalLabel">Analysis Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="analysisModalBody">
+                <!-- Analysis details will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.view-analysis').forEach(button => {
+    button.addEventListener('click', function() {
+        const analysisId = this.getAttribute('data-analysis-id');
+        fetch(`/get_analysis/${analysisId}`)
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('analysisModalBody').innerHTML = `
+                    <h3>${data.business_model_title}</h3>
+                    <p><strong>Problem Identified:</strong> ${data.problem_identified}</p>
+                    <p><strong>Proposed Solution:</strong> ${data.proposed_solution}</p>
+                    <p><strong>Target Market:</strong> ${data.target_market}</p>
+                    <p><strong>Potential Revenue Streams:</strong> ${data.potential_revenue_streams}</p>
+                    <p><strong>Challenges:</strong> ${data.challenges_or_considerations}</p>
+                    <p><strong>Market Entry Difficulty:</strong> ${data.market_entry_difficulty}</p>
+                `;
+                var myModal = new bootstrap.Modal(document.getElementById('analysisModal'));
+                myModal.show();
+            });
+    });
+});
+</script>
+{% endblock %}

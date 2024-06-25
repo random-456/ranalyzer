@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Mass Analysis Jobs</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Job ID</th>
+            <th>Subreddit</th>
+            <th>Total Posts</th>
+            <th>Completed Posts</th>
+            <th>Status</th>
+            <th>Created At</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td>{{ job.id }}</td>
+            <td>{{ job.subreddit }}</td>
+            <td>{{ job.total_posts }}</td>
+            <td>{{ job.completed_posts }}</td>
+            <td>{{ job.status }}</td>
+            <td>{{ job.created_at }}</td>
+            <td>
+                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

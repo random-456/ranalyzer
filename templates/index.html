@@ -121,4 +121,31 @@
         </div>
     </div>
 </div>
+
+
+<!-- Mass Analysis Modal -->
+<div class="modal fade" id="massAnalysisModal" tabindex="-1" aria-labelledby="massAnalysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="massAnalysisModalLabel">Mass Analysis</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="massAnalysisForm">
+                    <div class="mb-3">
+                        <label for="numPosts" class="form-label">Number of posts to analyze</label>
+                        <input type="number" class="form-control" id="numPosts" required min="1" max="1000">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="confirmMassAnalysis">Start Analysis</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 {% endblock %}

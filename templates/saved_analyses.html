@@ -12,7 +12,12 @@
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
             <p class="mb-1">Topic: {{ analysis.topic }}</p>
-            <small>Subreddit: r/{{ analysis.subreddit }}</small>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
         </a>
 
         <!-- Modal for each analysis -->

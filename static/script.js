@@ -101,7 +101,13 @@ function getPosts(subreddit) {
     .then(response => response.json())
     .then(data => {
         const postList = document.getElementById('postList');
-        postList.innerHTML = '';
+        postList.innerHTML = '<button id="startMassAnalysisBtn" class="btn btn-primary mb-3">Start Mass Analysis</button>';
+        
+        // Add event listener for the mass analysis button
+        document.getElementById('startMassAnalysisBtn').addEventListener('click', function() {
+            var myModal = new bootstrap.Modal(document.getElementById('massAnalysisModal'));
+            myModal.show();
+        });
         
         const analysis = JSON.parse(data.analysis);
         
@@ -143,6 +149,7 @@ function getPosts(subreddit) {
                 postList.appendChild(categoryDiv);
             }
         });
+
     })
     .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
 }
@@ -322,3 +329,34 @@ function selectTopic(topic) {
     topicGeneratorModal.hide();
     searchSubreddits();
 }
+
+document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
+    var numPosts = document.getElementById('numPosts').value;
+    var subreddit = currentSubreddit; // Assuming you have this variable set
+
+    fetch('/start_mass_analysis', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({subreddit: subreddit, num_posts: numPosts}),
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
+        myModal.hide();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to start mass analysis: ' + error.message);
+    });
+});

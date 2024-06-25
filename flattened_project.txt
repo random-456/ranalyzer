@@ -1,3 +1,21 @@
+########## __pycache__/celery_config.cpython-311.pyc ##########
+
+Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid start byte
+
+########## __pycache__/app.cpython-311.pyc ##########
+
+Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid start byte
+
+########## celery_config.py ##########
+
+broker_url = 'redis://localhost:6379/0'
+result_backend = 'redis://localhost:6379/0'
+task_serializer = 'json'
+result_serializer = 'json'
+accept_content = ['json']
+timezone = 'UTC'
+enable_utc = True
+
 ########## static/script.js ##########
 
 let currentTopic = '';
@@ -103,7 +121,13 @@ function getPosts(subreddit) {
     .then(response => response.json())
     .then(data => {
         const postList = document.getElementById('postList');
-        postList.innerHTML = '';
+        postList.innerHTML = '<button id="startMassAnalysisBtn" class="btn btn-primary mb-3">Start Mass Analysis</button>';
+        
+        // Add event listener for the mass analysis button
+        document.getElementById('startMassAnalysisBtn').addEventListener('click', function() {
+            var myModal = new bootstrap.Modal(document.getElementById('massAnalysisModal'));
+            myModal.show();
+        });
         
         const analysis = JSON.parse(data.analysis);
         
@@ -145,6 +169,7 @@ function getPosts(subreddit) {
                 postList.appendChild(categoryDiv);
             }
         });
+
     })
     .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
 }
@@ -324,6 +349,37 @@ function selectTopic(topic) {
     topicGeneratorModal.hide();
     searchSubreddits();
 }
+
+document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
+    var numPosts = document.getElementById('numPosts').value;
+    var subreddit = currentSubreddit; // Assuming you have this variable set
+
+    fetch('/start_mass_analysis', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({subreddit: subreddit, num_posts: numPosts}),
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
+        myModal.hide();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to start mass analysis: ' + error.message);
+    });
+});
 
 ########## static/style.css ##########
 
@@ -659,19 +715,40 @@ body {
 ########## app.py ##########
 
 import os
+import time
 from flask import Flask, render_template, request, jsonify, session
 import praw
+from prawcore.exceptions import PrawcoreException
 from openai import OpenAI
 from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import Error
 import uuid
 import json
+from celery import Celery
+import celery_config
+import redis
 
 load_dotenv()
 
+
+
+# Test Redis connection
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=0)
+    redis_client.ping()
+    print("Successfully connected to Redis")
+except redis.ConnectionError:
+    print("Failed to connect to Redis")
+
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'fallback_secret_key')  # for session management
+app.config['broker_url'] = 'redis://localhost:6379/0'
+app.config['result_backend'] = 'redis://localhost:6379/0'
+
+celery = Celery(app.name)
+celery.conf.update(app.config)
+
 
 # MySQL Configuration
 db_config = {
@@ -698,15 +775,15 @@ def create_db_connection():
         print(f"Error while connecting to MySQL: {e}")
     return None
 
-def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title):
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id=None):
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
             query = """INSERT INTO analysis_results 
-                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title))
+                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id))
             connection.commit()
         except Error as e:
             print(f"Error while saving analysis: {e}")
@@ -743,7 +820,12 @@ def index():
 @app.route('/search_subreddits', methods=['POST'])
 def search_subreddits():
     topic = request.json['topic']
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for the subreddit search
     subreddits = list(reddit.subreddits.search(topic, limit=10))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, "Search subreddits")
+    
     subreddit_info = [{
         'name': sub.display_name,
         'description': sub.public_description,
@@ -752,16 +834,16 @@ def search_subreddits():
     
     # Analyze subreddits with OpenAI
     system_message = """
-You are an assistant that analyzes subreddits to determine their relevance to a given topic.
-You will receive a topic and a list of subreddits with their descriptions.
-Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
-Provide your response in the following JSON format:
-{
-    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
-}
-"""
+    You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+    You will receive a topic and a list of subreddits with their descriptions.
+    Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+    Provide your response in the following JSON format:
+    {
+        "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+    }
+    """
     
     user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
     
@@ -773,13 +855,21 @@ Provide your response in the following JSON format:
         ]
     )
     
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze subreddits")
+    
     analysis = completion.choices[0].message.content
     return jsonify({'subreddits': subreddit_info, 'analysis': analysis})
 
 @app.route('/get_posts', methods=['POST'])
 def get_posts():
     subreddit_name = request.json['subreddit']
-    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))  # Fetch more to ensure we get 25 with comments
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for fetching hot posts
+    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Get posts from r/{subreddit_name}")
+    
     posts_with_comments = [post for post in posts if post.num_comments > 0][:25]
     
     post_info = [{
@@ -802,12 +892,14 @@ Provide your response in the following JSON format:
     user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
     
     completion = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    )
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_message}
+    ]
+)
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze posts")
     
     analysis = completion.choices[0].message.content
     return jsonify({'posts': post_info, 'analysis': analysis})
@@ -817,10 +909,16 @@ def analyze_post():
     post_id = request.json['post_id']
     topic = request.json.get('topic', '')
     subreddit = request.json.get('subreddit', '')
-    user_id = session.get('user_id', 'anonymous')
+    user_id = request.json.get('user_id', session.get('user_id', 'anonymous'))
+    job_id = request.json.get('job_id', None)
     
-    user_profile = get_user_profile_data(user_id)
+    analysis = analyze_post_internal(post_id, topic, subreddit, user_id, job_id)
+    
+    return jsonify({'analysis': analysis})
 
+
+def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
+    reddit_requests_count = 1  # Count for fetching the submission
     submission = reddit.submission(id=post_id)
     
     content = f"Title: {submission.title}\n\n"
@@ -835,7 +933,11 @@ def analyze_post():
         content += f"Content: This is a link post. Link: {submission.url}"
     
     submission.comments.replace_more(limit=None)
+    reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
+    
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
     system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
@@ -863,7 +965,6 @@ def analyze_post():
 
     Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
-
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -872,14 +973,15 @@ def analyze_post():
         ]
     )
     analysis = completion.choices[0].message.content
-    
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
     analysis_json = json.loads(analysis)
     business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
 
     # Save the analysis to the database
-    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title)
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title, job_id=job_id)
     
-    return jsonify({'analysis': analysis})
+    return analysis
 
 
 @app.route('/get_user_profile', methods=['GET'])
@@ -976,6 +1078,9 @@ def generate_topics():
         )
 
         content = completion.choices[0].message.content
+        tokens_used = completion.usage.total_tokens
+        log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Generate topics")
+
         try:
             topics = json.loads(content)
             # Ensure topics are no more than 2 words
@@ -1013,9 +1118,232 @@ def saved_analyses():
     return jsonify({"error": "Database connection failed"}), 500
 
 
+def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO api_request_logs 
+                       (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info) 
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info))
+            connection.commit()
+        except Error as e:
+            print(f"Error logging API request: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+@celery.task(bind=True)
+def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
+    job = update_job_status(job_id, 'in_progress')
+    
+    posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
+    for i, post in enumerate(posts):
+        try:
+            analyze_post_internal(post.id, '', subreddit, user_id, job_id)
+            update_job_progress(job_id, i + 1)
+        except Exception as e:
+            print(f"Error analyzing post {post.id}: {str(e)}")
+    
+    update_job_status(job_id, 'completed')
+
+
+@app.route('/start_mass_analysis', methods=['POST'])
+def start_mass_analysis():
+    try:
+        app.logger.info("start_mass_analysis called")
+        user_id = session.get('user_id', 'anonymous')
+        app.logger.info(f"User ID: {user_id}")
+        subreddit = request.json['subreddit']
+        app.logger.info(f"Subreddit: {subreddit}")
+        num_posts = int(request.json['num_posts'])
+        app.logger.info(f"Number of posts: {num_posts}")
+        
+        job_id = create_mass_analysis_job(user_id, subreddit, num_posts)
+        app.logger.info(f"Created job with ID: {job_id}")
+        if job_id is None:
+            app.logger.error("Failed to create job")
+            return jsonify({'error': 'Failed to create job'}), 500
+        
+        perform_mass_analysis.delay(job_id, user_id, subreddit, num_posts)
+        app.logger.info(f"Started mass analysis task for job {job_id}")
+        
+        return jsonify({'job_id': job_id})
+    except Exception as e:
+        app.logger.error(f"Error in start_mass_analysis: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_job_status/<int:job_id>')
+def get_job_status(job_id):
+    job = get_job_by_id(job_id)
+    return jsonify(job)
+
+@app.route('/mass_analysis_jobs')
+def mass_analysis_jobs():
+    user_id = session.get('user_id', 'anonymous')
+    jobs = get_user_jobs(user_id)
+    return render_template('mass_analysis_jobs.html', jobs=jobs)
+
+@app.route('/job_results/<int:job_id>')
+def job_results(job_id):
+    analyses = get_job_analyses(job_id)
+    return render_template('job_results.html', analyses=analyses)
+
+
 @app.template_filter('from_json')
 def from_json(value):
     return json.loads(value)
+
+@celery.task
+def update_job_statuses():
+    # Update status of all in-progress jobs
+    pass
+
+celery.conf.beat_schedule = {
+    'update-job-statuses-every-minute': {
+        'task': 'app.update_job_statuses',
+        'schedule': 60.0,
+    },
+}
+
+
+def create_mass_analysis_job(user_id, subreddit, num_posts):
+    connection = None
+    try:
+        connection = create_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            query = """INSERT INTO mass_analysis_jobs 
+                       (user_id, subreddit, total_posts, status) 
+                       VALUES (%s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, subreddit, num_posts, 'pending'))
+            connection.commit()
+            return cursor.lastrowid
+        else:
+            app.logger.error("Failed to create database connection")
+            return None
+    except Error as e:
+        app.logger.error(f"Error creating mass analysis job: {e}", exc_info=True)
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def update_job_status(job_id, status):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """UPDATE mass_analysis_jobs 
+                       SET status = %s
+                       WHERE id = %s"""
+            cursor.execute(query, (status, job_id))
+            connection.commit()
+        except Error as e:
+            print(f"Error updating job status: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+def update_job_progress(job_id, completed_posts):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """UPDATE mass_analysis_jobs 
+                       SET completed_posts = %s
+                       WHERE id = %s"""
+            cursor.execute(query, (completed_posts, job_id))
+            connection.commit()
+        except Error as e:
+            print(f"Error updating job progress: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+def get_unanalyzed_posts(user_id, subreddit, num_posts):
+    analyzed_posts = set()
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """SELECT post_id FROM analysis_results 
+                       WHERE user_id = %s AND subreddit = %s"""
+            cursor.execute(query, (user_id, subreddit))
+            analyzed_posts = set(row[0] for row in cursor.fetchall())
+        except Error as e:
+            print(f"Error fetching analyzed posts: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    
+    subreddit_instance = reddit.subreddit(subreddit)
+    unanalyzed_posts = []
+    for post in subreddit_instance.new(limit=None):
+        if post.id not in analyzed_posts:
+            unanalyzed_posts.append(post)
+            if len(unanalyzed_posts) == num_posts:
+                break
+    return unanalyzed_posts
+
+def get_job_by_id(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM mass_analysis_jobs 
+                       WHERE id = %s"""
+            cursor.execute(query, (job_id,))
+            return cursor.fetchone()
+        except Error as e:
+            print(f"Error fetching job: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
+
+def get_user_jobs(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM mass_analysis_jobs 
+                       WHERE user_id = %s
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching user jobs: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_job_analyses(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM analysis_results 
+                       WHERE job_id = %s"""
+            cursor.execute(query, (job_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching job analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
 
 
 if __name__ == '__main__':
@@ -1146,6 +1474,33 @@ if __name__ == '__main__':
         </div>
     </div>
 </div>
+
+
+<!-- Mass Analysis Modal -->
+<div class="modal fade" id="massAnalysisModal" tabindex="-1" aria-labelledby="massAnalysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="massAnalysisModalLabel">Mass Analysis</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="massAnalysisForm">
+                    <div class="mb-3">
+                        <label for="numPosts" class="form-label">Number of posts to analyze</label>
+                        <input type="number" class="form-control" id="numPosts" required min="1" max="1000">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="confirmMassAnalysis">Start Analysis</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 {% endblock %}
 
 ########## templates/base.html ##########
@@ -1206,7 +1561,12 @@ if __name__ == '__main__':
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
             <p class="mb-1">Topic: {{ analysis.topic }}</p>
-            <small>Subreddit: r/{{ analysis.subreddit }}</small>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
         </a>
 
         <!-- Modal for each analysis -->
@@ -1247,10 +1607,130 @@ if __name__ == '__main__':
 {% else %}
     <p>No saved analyses found.</p>
 {% endif %}
+{% endblock %}
+
+########## templates/mass_analysis_jobs.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Mass Analysis Jobs</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Job ID</th>
+            <th>Subreddit</th>
+            <th>Total Posts</th>
+            <th>Completed Posts</th>
+            <th>Status</th>
+            <th>Created At</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td>{{ job.id }}</td>
+            <td>{{ job.subreddit }}</td>
+            <td>{{ job.total_posts }}</td>
+            <td>{{ job.completed_posts }}</td>
+            <td>{{ job.status }}</td>
+            <td>{{ job.created_at }}</td>
+            <td>
+                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+########## templates/job_results.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Job Results</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Post Title</th>
+            <th>Business Model</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for analysis in analyses %}
+        <tr>
+            <td>{{ analysis.post_title }}</td>
+            <td>{{ analysis.business_model_title }}</td>
+            <td>
+                <button class="btn btn-primary view-analysis" data-analysis-id="{{ analysis.id }}">View Analysis</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- Analysis Modal -->
+<div class="modal fade" id="analysisModal" tabindex="-1" aria-labelledby="analysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="analysisModalLabel">Analysis Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="analysisModalBody">
+                <!-- Analysis details will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.view-analysis').forEach(button => {
+    button.addEventListener('click', function() {
+        const analysisId = this.getAttribute('data-analysis-id');
+        fetch(`/get_analysis/${analysisId}`)
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('analysisModalBody').innerHTML = `
+                    <h3>${data.business_model_title}</h3>
+                    <p><strong>Problem Identified:</strong> ${data.problem_identified}</p>
+                    <p><strong>Proposed Solution:</strong> ${data.proposed_solution}</p>
+                    <p><strong>Target Market:</strong> ${data.target_market}</p>
+                    <p><strong>Potential Revenue Streams:</strong> ${data.potential_revenue_streams}</p>
+                    <p><strong>Challenges:</strong> ${data.challenges_or_considerations}</p>
+                    <p><strong>Market Entry Difficulty:</strong> ${data.market_entry_difficulty}</p>
+                `;
+                var myModal = new bootstrap.Modal(document.getElementById('analysisModal'));
+                myModal.show();
+            });
+    });
+});
+</script>
 {% endblock %}
 
 ########## flattened_project.txt ##########
 
+########## __pycache__/celery_config.cpython-311.pyc ##########
+
+Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid start byte
+
+########## __pycache__/app.cpython-311.pyc ##########
+
+Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid start byte
+
+########## celery_config.py ##########
+
+broker_url = 'redis://localhost:6379/0'
+result_backend = 'redis://localhost:6379/0'
+task_serializer = 'json'
+result_serializer = 'json'
+accept_content = ['json']
+timezone = 'UTC'
+enable_utc = True
+
 ########## static/script.js ##########
 
 let currentTopic = '';
@@ -1356,7 +1836,13 @@ function getPosts(subreddit) {
     .then(response => response.json())
     .then(data => {
         const postList = document.getElementById('postList');
-        postList.innerHTML = '';
+        postList.innerHTML = '<button id="startMassAnalysisBtn" class="btn btn-primary mb-3">Start Mass Analysis</button>';
+        
+        // Add event listener for the mass analysis button
+        document.getElementById('startMassAnalysisBtn').addEventListener('click', function() {
+            var myModal = new bootstrap.Modal(document.getElementById('massAnalysisModal'));
+            myModal.show();
+        });
         
         const analysis = JSON.parse(data.analysis);
         
@@ -1398,6 +1884,7 @@ function getPosts(subreddit) {
                 postList.appendChild(categoryDiv);
             }
         });
+
     })
     .catch(error => showError('postList', 'Failed to fetch posts. Please try again.'));
 }
@@ -1577,6 +2064,37 @@ function selectTopic(topic) {
     topicGeneratorModal.hide();
     searchSubreddits();
 }
+
+document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
+    var numPosts = document.getElementById('numPosts').value;
+    var subreddit = currentSubreddit; // Assuming you have this variable set
+
+    fetch('/start_mass_analysis', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({subreddit: subreddit, num_posts: numPosts}),
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
+        myModal.hide();
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to start mass analysis: ' + error.message);
+    });
+});
 
 ########## static/style.css ##########
 
@@ -1912,19 +2430,40 @@ body {
 ########## app.py ##########
 
 import os
+import time
 from flask import Flask, render_template, request, jsonify, session
 import praw
+from prawcore.exceptions import PrawcoreException
 from openai import OpenAI
 from dotenv import load_dotenv
 import mysql.connector
 from mysql.connector import Error
 import uuid
 import json
+from celery import Celery
+import celery_config
+import redis
 
 load_dotenv()
 
+
+
+# Test Redis connection
+try:
+    redis_client = redis.Redis(host='localhost', port=6379, db=0)
+    redis_client.ping()
+    print("Successfully connected to Redis")
+except redis.ConnectionError:
+    print("Failed to connect to Redis")
+
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'fallback_secret_key')  # for session management
+app.config['broker_url'] = 'redis://localhost:6379/0'
+app.config['result_backend'] = 'redis://localhost:6379/0'
+
+celery = Celery(app.name)
+celery.conf.update(app.config)
+
 
 # MySQL Configuration
 db_config = {
@@ -1951,15 +2490,15 @@ def create_db_connection():
         print(f"Error while connecting to MySQL: {e}")
     return None
 
-def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title):
+def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id=None):
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
             query = """INSERT INTO analysis_results 
-                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title))
+                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id))
             connection.commit()
         except Error as e:
             print(f"Error while saving analysis: {e}")
@@ -1996,7 +2535,12 @@ def index():
 @app.route('/search_subreddits', methods=['POST'])
 def search_subreddits():
     topic = request.json['topic']
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for the subreddit search
     subreddits = list(reddit.subreddits.search(topic, limit=10))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, "Search subreddits")
+    
     subreddit_info = [{
         'name': sub.display_name,
         'description': sub.public_description,
@@ -2005,16 +2549,16 @@ def search_subreddits():
     
     # Analyze subreddits with OpenAI
     system_message = """
-You are an assistant that analyzes subreddits to determine their relevance to a given topic.
-You will receive a topic and a list of subreddits with their descriptions.
-Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
-Provide your response in the following JSON format:
-{
-    "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
-    "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
-}
-"""
+    You are an assistant that analyzes subreddits to determine their relevance to a given topic.
+    You will receive a topic and a list of subreddits with their descriptions.
+    Your task is to sort these subreddits into three categories: Most relevant, Maybe relevant, and Less relevant.
+    Provide your response in the following JSON format:
+    {
+        "most_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "maybe_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}],
+        "not_relevant": [{"name": "subreddit_name", "reason": "brief explanation"}]
+    }
+    """
     
     user_message = f"Topic: {topic}\nSubreddits:\n" + "\n".join([f"{sub['name']}: {sub['description']}" for sub in subreddit_info])
     
@@ -2026,13 +2570,21 @@ Provide your response in the following JSON format:
         ]
     )
     
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze subreddits")
+    
     analysis = completion.choices[0].message.content
     return jsonify({'subreddits': subreddit_info, 'analysis': analysis})
 
 @app.route('/get_posts', methods=['POST'])
 def get_posts():
     subreddit_name = request.json['subreddit']
-    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))  # Fetch more to ensure we get 25 with comments
+    user_id = session.get('user_id', 'anonymous')
+    
+    reddit_requests_count = 1  # Count for fetching hot posts
+    posts = list(reddit.subreddit(subreddit_name).hot(limit=100))
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Get posts from r/{subreddit_name}")
+    
     posts_with_comments = [post for post in posts if post.num_comments > 0][:25]
     
     post_info = [{
@@ -2055,12 +2607,14 @@ Provide your response in the following JSON format:
     user_message = "Post titles:\n" + "\n".join([f"{post['id']}: {post['title']}" for post in post_info])
     
     completion = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    )
+    model="gpt-3.5-turbo",
+    messages=[
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_message}
+    ]
+)
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze posts")
     
     analysis = completion.choices[0].message.content
     return jsonify({'posts': post_info, 'analysis': analysis})
@@ -2070,10 +2624,16 @@ def analyze_post():
     post_id = request.json['post_id']
     topic = request.json.get('topic', '')
     subreddit = request.json.get('subreddit', '')
-    user_id = session.get('user_id', 'anonymous')
+    user_id = request.json.get('user_id', session.get('user_id', 'anonymous'))
+    job_id = request.json.get('job_id', None)
     
-    user_profile = get_user_profile_data(user_id)
+    analysis = analyze_post_internal(post_id, topic, subreddit, user_id, job_id)
+    
+    return jsonify({'analysis': analysis})
 
+
+def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
+    reddit_requests_count = 1  # Count for fetching the submission
     submission = reddit.submission(id=post_id)
     
     content = f"Title: {submission.title}\n\n"
@@ -2088,7 +2648,11 @@ def analyze_post():
         content += f"Content: This is a link post. Link: {submission.url}"
     
     submission.comments.replace_more(limit=None)
+    reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
+    
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
     system_message = f"""You are an assistant that analyzes reddit posts and their comments to detect and understand potential problems that people have and derive business models from them. I will provide the post title, content (which may be text, an image description, or a link), and the comments to you.
@@ -2116,7 +2680,6 @@ def analyze_post():
 
     Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
-
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -2125,14 +2688,15 @@ def analyze_post():
         ]
     )
     analysis = completion.choices[0].message.content
-    
+    tokens_used = completion.usage.total_tokens
+    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
     analysis_json = json.loads(analysis)
     business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
 
     # Save the analysis to the database
-    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title)
+    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title, job_id=job_id)
     
-    return jsonify({'analysis': analysis})
+    return analysis
 
 
 @app.route('/get_user_profile', methods=['GET'])
@@ -2229,6 +2793,9 @@ def generate_topics():
         )
 
         content = completion.choices[0].message.content
+        tokens_used = completion.usage.total_tokens
+        log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Generate topics")
+
         try:
             topics = json.loads(content)
             # Ensure topics are no more than 2 words
@@ -2266,9 +2833,232 @@ def saved_analyses():
     return jsonify({"error": "Database connection failed"}), 500
 
 
+def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """INSERT INTO api_request_logs 
+                       (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info) 
+                       VALUES (%s, %s, %s, %s, %s, %s)"""
+            cursor.execute(query, (api_type, user_id, openai_model, openai_tokens_used, reddit_requests_count, additional_info))
+            connection.commit()
+        except Error as e:
+            print(f"Error logging API request: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+
+@celery.task(bind=True)
+def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
+    job = update_job_status(job_id, 'in_progress')
+    
+    posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
+    for i, post in enumerate(posts):
+        try:
+            analyze_post_internal(post.id, '', subreddit, user_id, job_id)
+            update_job_progress(job_id, i + 1)
+        except Exception as e:
+            print(f"Error analyzing post {post.id}: {str(e)}")
+    
+    update_job_status(job_id, 'completed')
+
+
+@app.route('/start_mass_analysis', methods=['POST'])
+def start_mass_analysis():
+    try:
+        app.logger.info("start_mass_analysis called")
+        user_id = session.get('user_id', 'anonymous')
+        app.logger.info(f"User ID: {user_id}")
+        subreddit = request.json['subreddit']
+        app.logger.info(f"Subreddit: {subreddit}")
+        num_posts = int(request.json['num_posts'])
+        app.logger.info(f"Number of posts: {num_posts}")
+        
+        job_id = create_mass_analysis_job(user_id, subreddit, num_posts)
+        app.logger.info(f"Created job with ID: {job_id}")
+        if job_id is None:
+            app.logger.error("Failed to create job")
+            return jsonify({'error': 'Failed to create job'}), 500
+        
+        perform_mass_analysis.delay(job_id, user_id, subreddit, num_posts)
+        app.logger.info(f"Started mass analysis task for job {job_id}")
+        
+        return jsonify({'job_id': job_id})
+    except Exception as e:
+        app.logger.error(f"Error in start_mass_analysis: {str(e)}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/get_job_status/<int:job_id>')
+def get_job_status(job_id):
+    job = get_job_by_id(job_id)
+    return jsonify(job)
+
+@app.route('/mass_analysis_jobs')
+def mass_analysis_jobs():
+    user_id = session.get('user_id', 'anonymous')
+    jobs = get_user_jobs(user_id)
+    return render_template('mass_analysis_jobs.html', jobs=jobs)
+
+@app.route('/job_results/<int:job_id>')
+def job_results(job_id):
+    analyses = get_job_analyses(job_id)
+    return render_template('job_results.html', analyses=analyses)
+
+
 @app.template_filter('from_json')
 def from_json(value):
     return json.loads(value)
+
+@celery.task
+def update_job_statuses():
+    # Update status of all in-progress jobs
+    pass
+
+celery.conf.beat_schedule = {
+    'update-job-statuses-every-minute': {
+        'task': 'app.update_job_statuses',
+        'schedule': 60.0,
+    },
+}
+
+
+def create_mass_analysis_job(user_id, subreddit, num_posts):
+    connection = None
+    try:
+        connection = create_db_connection()
+        if connection:
+            cursor = connection.cursor()
+            query = """INSERT INTO mass_analysis_jobs 
+                       (user_id, subreddit, total_posts, status) 
+                       VALUES (%s, %s, %s, %s)"""
+            cursor.execute(query, (user_id, subreddit, num_posts, 'pending'))
+            connection.commit()
+            return cursor.lastrowid
+        else:
+            app.logger.error("Failed to create database connection")
+            return None
+    except Error as e:
+        app.logger.error(f"Error creating mass analysis job: {e}", exc_info=True)
+        return None
+    finally:
+        if connection and connection.is_connected():
+            cursor.close()
+            connection.close()
+
+def update_job_status(job_id, status):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """UPDATE mass_analysis_jobs 
+                       SET status = %s
+                       WHERE id = %s"""
+            cursor.execute(query, (status, job_id))
+            connection.commit()
+        except Error as e:
+            print(f"Error updating job status: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+def update_job_progress(job_id, completed_posts):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """UPDATE mass_analysis_jobs 
+                       SET completed_posts = %s
+                       WHERE id = %s"""
+            cursor.execute(query, (completed_posts, job_id))
+            connection.commit()
+        except Error as e:
+            print(f"Error updating job progress: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+
+def get_unanalyzed_posts(user_id, subreddit, num_posts):
+    analyzed_posts = set()
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """SELECT post_id FROM analysis_results 
+                       WHERE user_id = %s AND subreddit = %s"""
+            cursor.execute(query, (user_id, subreddit))
+            analyzed_posts = set(row[0] for row in cursor.fetchall())
+        except Error as e:
+            print(f"Error fetching analyzed posts: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    
+    subreddit_instance = reddit.subreddit(subreddit)
+    unanalyzed_posts = []
+    for post in subreddit_instance.new(limit=None):
+        if post.id not in analyzed_posts:
+            unanalyzed_posts.append(post)
+            if len(unanalyzed_posts) == num_posts:
+                break
+    return unanalyzed_posts
+
+def get_job_by_id(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM mass_analysis_jobs 
+                       WHERE id = %s"""
+            cursor.execute(query, (job_id,))
+            return cursor.fetchone()
+        except Error as e:
+            print(f"Error fetching job: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
+
+def get_user_jobs(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM mass_analysis_jobs 
+                       WHERE user_id = %s
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching user jobs: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_job_analyses(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT * FROM analysis_results 
+                       WHERE job_id = %s"""
+            cursor.execute(query, (job_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching job analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
 
 
 if __name__ == '__main__':
@@ -2399,6 +3189,33 @@ if __name__ == '__main__':
         </div>
     </div>
 </div>
+
+
+<!-- Mass Analysis Modal -->
+<div class="modal fade" id="massAnalysisModal" tabindex="-1" aria-labelledby="massAnalysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="massAnalysisModalLabel">Mass Analysis</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="massAnalysisForm">
+                    <div class="mb-3">
+                        <label for="numPosts" class="form-label">Number of posts to analyze</label>
+                        <input type="number" class="form-control" id="numPosts" required min="1" max="1000">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="confirmMassAnalysis">Start Analysis</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
 {% endblock %}
 
 ########## templates/base.html ##########
@@ -2459,7 +3276,12 @@ if __name__ == '__main__':
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
             <p class="mb-1">Topic: {{ analysis.topic }}</p>
-            <small>Subreddit: r/{{ analysis.subreddit }}</small>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
         </a>
 
         <!-- Modal for each analysis -->
@@ -2500,6 +3322,108 @@ if __name__ == '__main__':
 {% else %}
     <p>No saved analyses found.</p>
 {% endif %}
+{% endblock %}
+
+########## templates/mass_analysis_jobs.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Mass Analysis Jobs</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Job ID</th>
+            <th>Subreddit</th>
+            <th>Total Posts</th>
+            <th>Completed Posts</th>
+            <th>Status</th>
+            <th>Created At</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td>{{ job.id }}</td>
+            <td>{{ job.subreddit }}</td>
+            <td>{{ job.total_posts }}</td>
+            <td>{{ job.completed_posts }}</td>
+            <td>{{ job.status }}</td>
+            <td>{{ job.created_at }}</td>
+            <td>
+                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
+
+########## templates/job_results.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Job Results</h1>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Post Title</th>
+            <th>Business Model</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for analysis in analyses %}
+        <tr>
+            <td>{{ analysis.post_title }}</td>
+            <td>{{ analysis.business_model_title }}</td>
+            <td>
+                <button class="btn btn-primary view-analysis" data-analysis-id="{{ analysis.id }}">View Analysis</button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- Analysis Modal -->
+<div class="modal fade" id="analysisModal" tabindex="-1" aria-labelledby="analysisModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="analysisModalLabel">Analysis Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body" id="analysisModalBody">
+                <!-- Analysis details will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.view-analysis').forEach(button => {
+    button.addEventListener('click', function() {
+        const analysisId = this.getAttribute('data-analysis-id');
+        fetch(`/get_analysis/${analysisId}`)
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('analysisModalBody').innerHTML = `
+                    <h3>${data.business_model_title}</h3>
+                    <p><strong>Problem Identified:</strong> ${data.problem_identified}</p>
+                    <p><strong>Proposed Solution:</strong> ${data.proposed_solution}</p>
+                    <p><strong>Target Market:</strong> ${data.target_market}</p>
+                    <p><strong>Potential Revenue Streams:</strong> ${data.potential_revenue_streams}</p>
+                    <p><strong>Challenges:</strong> ${data.challenges_or_considerations}</p>
+                    <p><strong>Market Entry Difficulty:</strong> ${data.market_entry_difficulty}</p>
+                `;
+                var myModal = new bootstrap.Modal(document.getElementById('analysisModal'));
+                myModal.show();
+            });
+    });
+});
+</script>
 {% endblock %}
 
 

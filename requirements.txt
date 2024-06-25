@@ -3,3 +3,5 @@ praw
 python-dotenv
 openai
 uuid
+celery
+redis
