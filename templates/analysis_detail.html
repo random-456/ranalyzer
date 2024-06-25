@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ analysis.business_model_title }}</h1>
+
+<h6>Original Post: {{ analysis.post_title }}</h6>
+<p><strong>Topic:</strong> {{ analysis.topic }}</p>
+<p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
+<p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+<p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
+
+<h6 class="mt-4">Analysis:</h6>
+{% set analysis_data = analysis.analysis|from_json %}
+{% if analysis_data.problem_identified %}
+    <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
+    <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
+    <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
+    <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
+    <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
+    <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
+    <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
+{% else %}
+    <p>{{ analysis_data.analysis }}</p>
+    <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
+{% endif %}
+
+<a href="{{ url_for('analysis_list', source=source, job_id=job_id) }}" class="btn btn-primary mt-3">Back to List</a>
+{% endblock %}

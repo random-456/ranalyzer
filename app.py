@@ -220,7 +220,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
     reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
     
-    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Retrieve post {post_id}")
     
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
@@ -628,6 +628,89 @@ def get_job_analyses(job_id):
                 cursor.close()
                 connection.close()
     return []
+
+
+@app.route('/analyses')
+def analysis_list():
+    user_id = session.get('user_id', 'anonymous')
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    
+    if source == 'job' and job_id:
+        analyses = get_job_analyses(job_id)
+        title = f"Job #{job_id} Results"
+    else:
+        analyses = get_saved_analyses(user_id)
+        title = "Your Saved Analyses"
+    
+    return render_template('analysis_list.html', analyses=analyses, title=title)
+
+@app.route('/analysis/<int:analysis_id>')
+def analysis_detail(analysis_id):
+    analysis = get_analysis_by_id(analysis_id)
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    return render_template('analysis_detail.html', analysis=analysis, source=source, job_id=job_id)
+
+
+def get_saved_analyses(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s AND job_id IS NULL
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_job_analyses(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE job_id = %s
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (job_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching job analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_analysis_by_id(analysis_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id
+                       FROM analysis_results 
+                       WHERE id = %s"""
+            cursor.execute(query, (analysis_id,))
+            analysis = cursor.fetchone()
+            return analysis
+        except Error as e:
+            print(f"Error while fetching analysis by ID: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@
             <td>{{ job.status }}</td>
             <td>{{ job.created_at }}</td>
             <td>
-                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+                <a href="{{ url_for('analysis_list', source='job', job_id=job.id) }}" class="btn btn-primary">View Results</a>
             </td>
         </tr>
         {% endfor %}

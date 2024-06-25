@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ title }}</h1>
+
+{% if analyses %}
+    <div class="list-group">
+    {% for analysis in analyses %}
+        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id) }}" class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
+                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
+        </a>
+    {% endfor %}
+    </div>
+{% else %}
+    <p>No analyses found.</p>
+{% endif %}
+{% endblock %}
