@@ -332,7 +332,7 @@ function selectTopic(topic) {
 
 document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
     var numPosts = document.getElementById('numPosts').value;
-    var subreddit = currentSubreddit; // Assuming you have this variable set
+    var subreddit = currentSubreddit;
 
     fetch('/start_mass_analysis', {
         method: 'POST',
@@ -351,12 +351,38 @@ document.getElementById('confirmMassAnalysis').addEventListener('click', functio
         if (data.error) {
             throw new Error(data.error);
         }
-        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        showToast('Mass analysis job started', `Job ID: ${data.job_id}`, 'success');
         var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
         myModal.hide();
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('Failed to start mass analysis: ' + error.message);
+        showToast('Error', 'Failed to start mass analysis: ' + error.message, 'danger');
     });
 });
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}

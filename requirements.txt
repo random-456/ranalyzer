@@ -6,3 +6,4 @@ uuid
 celery
 redis
 mysql-connector-python
+matplotlib==3.5.2

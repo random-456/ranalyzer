@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">API Usage Statistics</h1>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">OpenAI API Usage</h5>
+                <p class="card-text">Total tokens used in the last 24 hours: {{ openai_usage }}</p>
+                <img src="data:image/png;base64,{{ openai_chart }}" alt="OpenAI API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Reddit API Usage</h5>
+                <p class="card-text">Total requests made in the last 24 hours: {{ reddit_usage }}</p>
+                <img src="data:image/png;base64,{{ reddit_chart }}" alt="Reddit API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

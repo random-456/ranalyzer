@@ -16,6 +16,45 @@ body {
     color: var(--text-color);
 }
 
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.8rem;
+}
+
+h3 {
+    font-size: 1.3rem;
+    margin-bottom: 0.6rem;
+}
+
+h4 {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+}
+
+h5 {
+    font-size: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+h6 {
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+}
+
+.modal-title {
+    font-size: 1.2rem;
+}
+
+.list-group-item h5 {
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
+}
+
 .logo-text {
     font-weight: bold;
     font-size: 24px;
@@ -325,4 +364,31 @@ body {
 
 .list-group-item-action {
     transition: background-image 0.3s ease;
+}
+
+.toast {
+    min-width: 200px;
+}
+
+.toast .toast-header {
+    background-color: rgba(255, 255, 255, 0.85);
+    background-clip: padding-box;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.toast.bg-success,
+.toast.bg-danger {
+    color: white;
+}
+
+.toast.bg-success .toast-header,
+.toast.bg-danger .toast-header {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.toast.bg-success .btn-close,
+.toast.bg-danger .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
 }

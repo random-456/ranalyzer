@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: cranky-tu.87-106-159-152.plesk.page
--- Erstellungszeit: 25. Jun 2024 um 18:28
+-- Erstellungszeit: 26. Jun 2024 um 08:17
 -- Server-Version: 10.5.23-MariaDB-0+deb11u1
 -- PHP-Version: 8.2.8
 
@@ -90,8 +90,7 @@ CREATE TABLE `user_profiles` (
 -- Indizes für die Tabelle `analysis_results`
 --
 ALTER TABLE `analysis_results`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `unique_user_post` (`user_id`,`post_id`);
+  ADD PRIMARY KEY (`id`);
 
 --
 -- Indizes für die Tabelle `api_request_logs`

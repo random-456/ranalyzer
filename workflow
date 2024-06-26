@@ -42,3 +42,17 @@ To-Do:
 
 - Next to the first input field we need a button which opens a modal that contains a topic finder/generator. It makes a new request to the OpenAI API with a system message which explains what is the whole purpose of this and then mentions the users profile details, and asks for some cool niche keywords which might have potential for certain business models. Keywords have to be provided in an aligned json format again which has to be requested in the system message. User can then select one of the proposed keywords and this is then written to the search box and the search event is triggered automatically as if we would have clicked the button, and the modal closes of course
 
+##########
+
+- Now let's extend the functionality of the tool: we want to have a feature to perform mass analyses of posts inside a subreddit. So after a subreddit has been chosen, in the chapter 3. Choose post we also want to see a new button in the very top which can be used to create a background job to execute the analysis e.g. for 100 latest posts whcih have not yet been analyzed by my user. This is important because we may want to execute this functionality multiple times. So then everytime it neds to take other posts (older ones whcih havent been analyzed before). the actual number can be entered by the user in a modal. then the task can be confirmed with another button and is then created somehow as a backgorund job (you know what soltion is best for that). Any questions or things to clarify before implementing it?
+
+##########
+
+Now we would like to implement a new feature: folders to organize the analyses
+
+- On the page where we see all our saved analyses, we need a button "Add folder" which opens a modal. Here I can specify a new folder name which is then created for my user. Folders are displayed on top of the list and the analyses items thereafter (except if they have been moved into a folder. then they are only shown if I click on the folder).
+- We will probably need a new table to manage the structure, right?
+- So normally all analyses are in the 'root' if they havent been assigned to a folder (i.e. no entry available in our new table).
+- No folders inside folders.
+
+For now, that's it. Please implement it for now and then afterwards we will extend it with more functionalities.

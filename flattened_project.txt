@@ -8,7 +8,7 @@ Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid 
 
 ########## __pycache__/app.cpython-39.pyc ##########
 
-Error reading file: 'utf-8' codec can't decode byte 0xa9 in position 8: invalid start byte
+Error reading file: 'utf-8' codec can't decode byte 0xc6 in position 8: invalid continuation byte
 
 ########## __pycache__/app.cpython-311.pyc ##########
 
@@ -360,7 +360,7 @@ function selectTopic(topic) {
 
 document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
     var numPosts = document.getElementById('numPosts').value;
-    var subreddit = currentSubreddit; // Assuming you have this variable set
+    var subreddit = currentSubreddit;
 
     fetch('/start_mass_analysis', {
         method: 'POST',
@@ -379,15 +379,41 @@ document.getElementById('confirmMassAnalysis').addEventListener('click', functio
         if (data.error) {
             throw new Error(data.error);
         }
-        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        showToast('Mass analysis job started', `Job ID: ${data.job_id}`, 'success');
         var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
         myModal.hide();
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('Failed to start mass analysis: ' + error.message);
+        showToast('Error', 'Failed to start mass analysis: ' + error.message, 'danger');
     });
 });
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}
 
 ########## static/style.css ##########
 
@@ -407,6 +433,45 @@ body {
     font-family: 'Nunito', 'Helvetica Neue', 'Helvetica', sans-serif;
     background-color: var(--background-color);
     color: var(--text-color);
+}
+
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.8rem;
+}
+
+h3 {
+    font-size: 1.3rem;
+    margin-bottom: 0.6rem;
+}
+
+h4 {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+}
+
+h5 {
+    font-size: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+h6 {
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+}
+
+.modal-title {
+    font-size: 1.2rem;
+}
+
+.list-group-item h5 {
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
 }
 
 .logo-text {
@@ -720,6 +785,33 @@ body {
     transition: background-image 0.3s ease;
 }
 
+.toast {
+    min-width: 200px;
+}
+
+.toast .toast-header {
+    background-color: rgba(255, 255, 255, 0.85);
+    background-clip: padding-box;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.toast.bg-success,
+.toast.bg-danger {
+    color: white;
+}
+
+.toast.bg-success .toast-header,
+.toast.bg-danger .toast-header {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.toast.bg-success .btn-close,
+.toast.bg-danger .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+
 ########## app.py ##########
 
 import os
@@ -736,6 +828,12 @@ import json
 from celery import Celery
 import celery_config
 import redis
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to Agg
+import matplotlib.pyplot as plt
+import io
+import base64
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -789,6 +887,7 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
         try:
             cursor = connection.cursor()
             analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
+            print(f"New analysis id: {analysis_id}")
             query = """INSERT INTO analysis_results 
                        (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
@@ -1150,28 +1249,7 @@ def generate_topics():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
-@app.route('/saved_analyses')
-def saved_analyses():
-    user_id = session.get('user_id', 'anonymous')
-    connection = create_db_connection()
-    if connection:
-        try:
-            cursor = connection.cursor(dictionary=True)
-            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
-                       FROM analysis_results 
-                       WHERE user_id = %s 
-                       ORDER BY created_at DESC"""
-            cursor.execute(query, (user_id,))
-            analyses = cursor.fetchall()
-            return render_template('saved_analyses.html', analyses=analyses)
-        except Error as e:
-            print(f"Error while fetching saved analyses: {e}")
-            return jsonify({"error": "Failed to fetch saved analyses"}), 500
-        finally:
-            if connection.is_connected():
-                cursor.close()
-                connection.close()
-    return jsonify({"error": "Database connection failed"}), 500
+
 
 
 def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
@@ -1413,14 +1491,36 @@ def analysis_list():
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
     
-    if source == 'job' and job_id:
-        analyses = get_job_analyses(job_id)
-        title = f"Job #{job_id} Results"
-    else:
-        analyses = get_saved_analyses(user_id)
-        title = "Your Saved Analyses"
-    
-    return render_template('analysis_list.html', analyses=analyses, title=title)
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            if source == 'job' and job_id:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s AND job_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, job_id))
+                analyses = cursor.fetchall()
+                title = f"Job #{job_id} Results"
+            else:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id,))
+                analyses = cursor.fetchall()
+                title = "Your Saved Analyses"
+            
+            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+        except Error as e:
+            print(f"Error while fetching analyses: {e}")
+            return jsonify({"error": "Failed to fetch analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -1488,6 +1588,99 @@ def get_analysis_by_id(analysis_id):
                 cursor.close()
                 connection.close()
     return None
+
+
+@app.route('/usage_statistics')
+def usage_statistics():
+    user_id = session.get('user_id', 'anonymous')
+    last_24_hours = datetime.now() - timedelta(days=1)
+    
+    # Get total usage
+    openai_usage, reddit_usage = get_total_usage(user_id, last_24_hours)
+    
+    # Get hourly usage
+    openai_hourly, reddit_hourly = get_hourly_usage(user_id, last_24_hours)
+    
+    # Generate charts
+    openai_chart = generate_chart(openai_hourly, "OpenAI API Usage (Tokens)")
+    reddit_chart = generate_chart(reddit_hourly, "Reddit API Usage (Requests)")
+    
+    return render_template('usage_statistics.html', 
+                           openai_usage=openai_usage,
+                           reddit_usage=reddit_usage,
+                           openai_chart=openai_chart,
+                           reddit_chart=reddit_chart)
+
+def get_total_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            """
+            cursor.execute(query, (user_id, start_time))
+            result = cursor.fetchone()
+            return result[0] or 0, result[1] or 0
+        finally:
+            cursor.close()
+            connection.close()
+    return 0, 0
+
+def get_hourly_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as hour,
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            GROUP BY hour
+            ORDER BY hour
+            """
+            cursor.execute(query, (user_id, start_time))
+            results = cursor.fetchall()
+            
+            # Create a dictionary to store results
+            hourly_data = {(start_time + timedelta(hours=i)).strftime('%Y-%m-%d %H:00:00'): (0, 0) for i in range(24)}
+            
+            for row in results:
+                hourly_data[row[0]] = (row[1] or 0, row[2] or 0)
+            
+            hours = [datetime.strptime(h, '%Y-%m-%d %H:%M:%S') for h in hourly_data.keys()]
+            openai_usage = [data[0] for data in hourly_data.values()]
+            reddit_usage = [data[1] for data in hourly_data.values()]
+            
+            return (hours, openai_usage), (hours, reddit_usage)
+        finally:
+            cursor.close()
+            connection.close()
+    return ([], []), ([], [])
+
+def generate_chart(data, title):
+    hours, usage = data
+    plt.figure(figsize=(10, 5))
+    plt.bar(range(len(hours)), usage)
+    plt.title(title)
+    plt.xlabel('Hour')
+    plt.ylabel('Usage')
+    plt.xticks(range(len(hours)), [h.strftime('%H:%M') for h in hours], rotation=45)
+    plt.tight_layout()
+    
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    plt.close()  # Close the figure to free up memory
+    
+    return base64.b64encode(img.getvalue()).decode()
 
 
 if __name__ == '__main__':
@@ -1677,6 +1870,7 @@ if __name__ == '__main__':
             <li><a href="/">Analyzer</a></li>
             <li><a href="{{ url_for('analysis_list', source='saved') }}">Saved Analyses</a></li>
             <li><a href="/mass_analysis_jobs">Mass Analysis Jobs</a></li>
+            <li><a href="/usage_statistics">Usage Statistics</a></li>
         </ul>
     </div>
 
@@ -1687,72 +1881,12 @@ if __name__ == '__main__':
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     {% block extra_js %}{% endblock %}
+
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="toastContainer"></div>
+    </div>
 </body>
 </html>
-
-########## templates/saved_analyses.html ##########
-
-{% extends "base.html" %}
-
-{% block content %}
-<h1 class="mb-4">Your Saved Analyses</h1>
-
-{% if analyses %}
-    <div class="list-group">
-    {% for analysis in analyses %}
-        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="modal" data-bs-target="#analysisModal{{ analysis.id }}">
-            <div class="d-flex w-100 justify-content-between">
-                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
-                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
-            </div>
-            <p class="mb-1">Topic: {{ analysis.topic }}</p>
-            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
-            {% if analysis.job_id %}
-                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
-            {% else %}
-                <small>Individual Analysis</small>
-            {% endif %}
-        </a>
-
-        <!-- Modal for each analysis -->
-        <div class="modal fade" id="analysisModal{{ analysis.id }}" tabindex="-1" aria-labelledby="analysisModalLabel{{ analysis.id }}" aria-hidden="true">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="analysisModalLabel{{ analysis.id }}">{{ analysis.business_model_title }}</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <h6>Original Post: {{ analysis.post_title }}</h6>
-                        <p><strong>Topic:</strong> {{ analysis.topic }}</p>
-                        <p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
-                        <p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
-                        <p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
-                        
-                        <h6 class="mt-4">Analysis:</h6>
-                        {% set analysis_data = analysis.analysis|from_json %}
-                        {% if analysis_data.problem_identified %}
-                            <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
-                            <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
-                            <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
-                            <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
-                            <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
-                            <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
-                            <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
-                        {% else %}
-                            <p>{{ analysis_data.analysis }}</p>
-                            <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-    {% endfor %}
-    </div>
-{% else %}
-    <p>No saved analyses found.</p>
-{% endif %}
-{% endblock %}
 
 ########## templates/mass_analysis_jobs.html ##########
 
@@ -1795,17 +1929,22 @@ if __name__ == '__main__':
 {% extends "base.html" %}
 
 {% block content %}
-<h1 class="mb-4">{{ title }}</h1>
+{% if 'Job #' in title %}
+    <h1 class="mb-2">Job Results</h1>
+    <p class="text-muted mb-4">Job ID: {{ title.split('#')[1].split(' ')[0] }}</p>
+{% else %}
+    <h1 class="mb-4">{{ title }}</h1>
+{% endif %}
 
 {% if analyses %}
     <div class="list-group">
     {% for analysis in analyses %}
-        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id) }}" class="list-group-item list-group-item-action">
+        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id, source=source, job_id=job_id) }}" class="list-group-item list-group-item-action">
             <div class="d-flex w-100 justify-content-between">
                 <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
-            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <p class="mb-1">Topic: {{ analysis.topic or 'N/A' }}</p>
             <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
             {% if analysis.job_id %}
                 <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
@@ -1818,6 +1957,35 @@ if __name__ == '__main__':
 {% else %}
     <p>No analyses found.</p>
 {% endif %}
+{% endblock %}
+
+########## templates/usage_statistics.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">API Usage Statistics</h1>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">OpenAI API Usage</h5>
+                <p class="card-text">Total tokens used in the last 24 hours: {{ openai_usage }}</p>
+                <img src="data:image/png;base64,{{ openai_chart }}" alt="OpenAI API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Reddit API Usage</h5>
+                <p class="card-text">Total requests made in the last 24 hours: {{ reddit_usage }}</p>
+                <img src="data:image/png;base64,{{ reddit_chart }}" alt="Reddit API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 ########## templates/analysis_detail.html ##########
@@ -1929,7 +2097,7 @@ Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid 
 
 ########## __pycache__/app.cpython-39.pyc ##########
 
-Error reading file: 'utf-8' codec can't decode byte 0xa9 in position 8: invalid start byte
+Error reading file: 'utf-8' codec can't decode byte 0xc6 in position 8: invalid continuation byte
 
 ########## __pycache__/app.cpython-311.pyc ##########
 
@@ -2281,7 +2449,7 @@ function selectTopic(topic) {
 
 document.getElementById('confirmMassAnalysis').addEventListener('click', function() {
     var numPosts = document.getElementById('numPosts').value;
-    var subreddit = currentSubreddit; // Assuming you have this variable set
+    var subreddit = currentSubreddit;
 
     fetch('/start_mass_analysis', {
         method: 'POST',
@@ -2300,15 +2468,41 @@ document.getElementById('confirmMassAnalysis').addEventListener('click', functio
         if (data.error) {
             throw new Error(data.error);
         }
-        alert('Mass analysis job started. Job ID: ' + data.job_id);
+        showToast('Mass analysis job started', `Job ID: ${data.job_id}`, 'success');
         var myModal = bootstrap.Modal.getInstance(document.getElementById('massAnalysisModal'));
         myModal.hide();
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('Failed to start mass analysis: ' + error.message);
+        showToast('Error', 'Failed to start mass analysis: ' + error.message, 'danger');
     });
 });
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}
 
 ########## static/style.css ##########
 
@@ -2328,6 +2522,45 @@ body {
     font-family: 'Nunito', 'Helvetica Neue', 'Helvetica', sans-serif;
     background-color: var(--background-color);
     color: var(--text-color);
+}
+
+h1 {
+    font-size: 1.8rem;
+    margin-bottom: 1rem;
+}
+
+h2 {
+    font-size: 1.5rem;
+    margin-bottom: 0.8rem;
+}
+
+h3 {
+    font-size: 1.3rem;
+    margin-bottom: 0.6rem;
+}
+
+h4 {
+    font-size: 1.1rem;
+    margin-bottom: 0.5rem;
+}
+
+h5 {
+    font-size: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+h6 {
+    font-size: 0.9rem;
+    margin-bottom: 0.3rem;
+}
+
+.modal-title {
+    font-size: 1.2rem;
+}
+
+.list-group-item h5 {
+    font-size: 1rem;
+    margin-bottom: 0.2rem;
 }
 
 .logo-text {
@@ -2641,6 +2874,33 @@ body {
     transition: background-image 0.3s ease;
 }
 
+.toast {
+    min-width: 200px;
+}
+
+.toast .toast-header {
+    background-color: rgba(255, 255, 255, 0.85);
+    background-clip: padding-box;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.toast.bg-success,
+.toast.bg-danger {
+    color: white;
+}
+
+.toast.bg-success .toast-header,
+.toast.bg-danger .toast-header {
+    color: white;
+    background-color: rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.toast.bg-success .btn-close,
+.toast.bg-danger .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+
 ########## app.py ##########
 
 import os
@@ -2657,6 +2917,12 @@ import json
 from celery import Celery
 import celery_config
 import redis
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to Agg
+import matplotlib.pyplot as plt
+import io
+import base64
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -2710,6 +2976,7 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
         try:
             cursor = connection.cursor()
             analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
+            print(f"New analysis id: {analysis_id}")
             query = """INSERT INTO analysis_results 
                        (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
@@ -3071,28 +3338,7 @@ def generate_topics():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
-@app.route('/saved_analyses')
-def saved_analyses():
-    user_id = session.get('user_id', 'anonymous')
-    connection = create_db_connection()
-    if connection:
-        try:
-            cursor = connection.cursor(dictionary=True)
-            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
-                       FROM analysis_results 
-                       WHERE user_id = %s 
-                       ORDER BY created_at DESC"""
-            cursor.execute(query, (user_id,))
-            analyses = cursor.fetchall()
-            return render_template('saved_analyses.html', analyses=analyses)
-        except Error as e:
-            print(f"Error while fetching saved analyses: {e}")
-            return jsonify({"error": "Failed to fetch saved analyses"}), 500
-        finally:
-            if connection.is_connected():
-                cursor.close()
-                connection.close()
-    return jsonify({"error": "Database connection failed"}), 500
+
 
 
 def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
@@ -3334,14 +3580,36 @@ def analysis_list():
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
     
-    if source == 'job' and job_id:
-        analyses = get_job_analyses(job_id)
-        title = f"Job #{job_id} Results"
-    else:
-        analyses = get_saved_analyses(user_id)
-        title = "Your Saved Analyses"
-    
-    return render_template('analysis_list.html', analyses=analyses, title=title)
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            if source == 'job' and job_id:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s AND job_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, job_id))
+                analyses = cursor.fetchall()
+                title = f"Job #{job_id} Results"
+            else:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id,))
+                analyses = cursor.fetchall()
+                title = "Your Saved Analyses"
+            
+            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+        except Error as e:
+            print(f"Error while fetching analyses: {e}")
+            return jsonify({"error": "Failed to fetch analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -3409,6 +3677,99 @@ def get_analysis_by_id(analysis_id):
                 cursor.close()
                 connection.close()
     return None
+
+
+@app.route('/usage_statistics')
+def usage_statistics():
+    user_id = session.get('user_id', 'anonymous')
+    last_24_hours = datetime.now() - timedelta(days=1)
+    
+    # Get total usage
+    openai_usage, reddit_usage = get_total_usage(user_id, last_24_hours)
+    
+    # Get hourly usage
+    openai_hourly, reddit_hourly = get_hourly_usage(user_id, last_24_hours)
+    
+    # Generate charts
+    openai_chart = generate_chart(openai_hourly, "OpenAI API Usage (Tokens)")
+    reddit_chart = generate_chart(reddit_hourly, "Reddit API Usage (Requests)")
+    
+    return render_template('usage_statistics.html', 
+                           openai_usage=openai_usage,
+                           reddit_usage=reddit_usage,
+                           openai_chart=openai_chart,
+                           reddit_chart=reddit_chart)
+
+def get_total_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            """
+            cursor.execute(query, (user_id, start_time))
+            result = cursor.fetchone()
+            return result[0] or 0, result[1] or 0
+        finally:
+            cursor.close()
+            connection.close()
+    return 0, 0
+
+def get_hourly_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as hour,
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            GROUP BY hour
+            ORDER BY hour
+            """
+            cursor.execute(query, (user_id, start_time))
+            results = cursor.fetchall()
+            
+            # Create a dictionary to store results
+            hourly_data = {(start_time + timedelta(hours=i)).strftime('%Y-%m-%d %H:00:00'): (0, 0) for i in range(24)}
+            
+            for row in results:
+                hourly_data[row[0]] = (row[1] or 0, row[2] or 0)
+            
+            hours = [datetime.strptime(h, '%Y-%m-%d %H:%M:%S') for h in hourly_data.keys()]
+            openai_usage = [data[0] for data in hourly_data.values()]
+            reddit_usage = [data[1] for data in hourly_data.values()]
+            
+            return (hours, openai_usage), (hours, reddit_usage)
+        finally:
+            cursor.close()
+            connection.close()
+    return ([], []), ([], [])
+
+def generate_chart(data, title):
+    hours, usage = data
+    plt.figure(figsize=(10, 5))
+    plt.bar(range(len(hours)), usage)
+    plt.title(title)
+    plt.xlabel('Hour')
+    plt.ylabel('Usage')
+    plt.xticks(range(len(hours)), [h.strftime('%H:%M') for h in hours], rotation=45)
+    plt.tight_layout()
+    
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    plt.close()  # Close the figure to free up memory
+    
+    return base64.b64encode(img.getvalue()).decode()
 
 
 if __name__ == '__main__':
@@ -3598,6 +3959,7 @@ if __name__ == '__main__':
             <li><a href="/">Analyzer</a></li>
             <li><a href="{{ url_for('analysis_list', source='saved') }}">Saved Analyses</a></li>
             <li><a href="/mass_analysis_jobs">Mass Analysis Jobs</a></li>
+            <li><a href="/usage_statistics">Usage Statistics</a></li>
         </ul>
     </div>
 
@@ -3608,72 +3970,12 @@ if __name__ == '__main__':
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
     {% block extra_js %}{% endblock %}
+
+    <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+        <div id="toastContainer"></div>
+    </div>
 </body>
 </html>
-
-########## templates/saved_analyses.html ##########
-
-{% extends "base.html" %}
-
-{% block content %}
-<h1 class="mb-4">Your Saved Analyses</h1>
-
-{% if analyses %}
-    <div class="list-group">
-    {% for analysis in analyses %}
-        <a href="#" class="list-group-item list-group-item-action" data-bs-toggle="modal" data-bs-target="#analysisModal{{ analysis.id }}">
-            <div class="d-flex w-100 justify-content-between">
-                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
-                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
-            </div>
-            <p class="mb-1">Topic: {{ analysis.topic }}</p>
-            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
-            {% if analysis.job_id %}
-                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
-            {% else %}
-                <small>Individual Analysis</small>
-            {% endif %}
-        </a>
-
-        <!-- Modal for each analysis -->
-        <div class="modal fade" id="analysisModal{{ analysis.id }}" tabindex="-1" aria-labelledby="analysisModalLabel{{ analysis.id }}" aria-hidden="true">
-            <div class="modal-dialog modal-lg">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="analysisModalLabel{{ analysis.id }}">{{ analysis.business_model_title }}</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <h6>Original Post: {{ analysis.post_title }}</h6>
-                        <p><strong>Topic:</strong> {{ analysis.topic }}</p>
-                        <p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
-                        <p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
-                        <p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
-                        
-                        <h6 class="mt-4">Analysis:</h6>
-                        {% set analysis_data = analysis.analysis|from_json %}
-                        {% if analysis_data.problem_identified %}
-                            <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
-                            <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
-                            <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
-                            <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
-                            <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
-                            <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
-                            <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
-                        {% else %}
-                            <p>{{ analysis_data.analysis }}</p>
-                            <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-        </div>
-    {% endfor %}
-    </div>
-{% else %}
-    <p>No saved analyses found.</p>
-{% endif %}
-{% endblock %}
 
 ########## templates/mass_analysis_jobs.html ##########
 
@@ -3716,17 +4018,22 @@ if __name__ == '__main__':
 {% extends "base.html" %}
 
 {% block content %}
-<h1 class="mb-4">{{ title }}</h1>
+{% if 'Job #' in title %}
+    <h1 class="mb-2">Job Results</h1>
+    <p class="text-muted mb-4">Job ID: {{ title.split('#')[1].split(' ')[0] }}</p>
+{% else %}
+    <h1 class="mb-4">{{ title }}</h1>
+{% endif %}
 
 {% if analyses %}
     <div class="list-group">
     {% for analysis in analyses %}
-        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id) }}" class="list-group-item list-group-item-action">
+        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id, source=source, job_id=job_id) }}" class="list-group-item list-group-item-action">
             <div class="d-flex w-100 justify-content-between">
                 <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
-            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <p class="mb-1">Topic: {{ analysis.topic or 'N/A' }}</p>
             <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
             {% if analysis.job_id %}
                 <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
@@ -3739,6 +4046,35 @@ if __name__ == '__main__':
 {% else %}
     <p>No analyses found.</p>
 {% endif %}
+{% endblock %}
+
+########## templates/usage_statistics.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">API Usage Statistics</h1>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">OpenAI API Usage</h5>
+                <p class="card-text">Total tokens used in the last 24 hours: {{ openai_usage }}</p>
+                <img src="data:image/png;base64,{{ openai_chart }}" alt="OpenAI API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-body">
+                <h5 class="card-title">Reddit API Usage</h5>
+                <p class="card-text">Total requests made in the last 24 hours: {{ reddit_usage }}</p>
+                <img src="data:image/png;base64,{{ reddit_chart }}" alt="Reddit API Usage Chart" class="img-fluid">
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 ########## templates/analysis_detail.html ##########
@@ -3840,14 +4176,14 @@ document.querySelectorAll('.view-analysis').forEach(button => {
 
 
 
-########## datamodel/240625_model.sql ##########
+########## datamodel/240626_model.sql ##########
 
 -- phpMyAdmin SQL Dump
 -- version 5.2.1
 -- https://www.phpmyadmin.net/
 --
 -- Host: cranky-tu.87-106-159-152.plesk.page
--- Erstellungszeit: 25. Jun 2024 um 18:28
+-- Erstellungszeit: 26. Jun 2024 um 08:17
 -- Server-Version: 10.5.23-MariaDB-0+deb11u1
 -- PHP-Version: 8.2.8
 
@@ -3934,8 +4270,7 @@ CREATE TABLE `user_profiles` (
 -- Indizes für die Tabelle `analysis_results`
 --
 ALTER TABLE `analysis_results`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `unique_user_post` (`user_id`,`post_id`);
+  ADD PRIMARY KEY (`id`);
 
 --
 -- Indizes für die Tabelle `api_request_logs`

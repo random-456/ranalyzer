@@ -12,6 +12,12 @@ import json
 from celery import Celery
 import celery_config
 import redis
+import matplotlib
+matplotlib.use('Agg')  # Set the backend to Agg
+import matplotlib.pyplot as plt
+import io
+import base64
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -427,28 +433,7 @@ def generate_topics():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
-@app.route('/saved_analyses')
-def saved_analyses():
-    user_id = session.get('user_id', 'anonymous')
-    connection = create_db_connection()
-    if connection:
-        try:
-            cursor = connection.cursor(dictionary=True)
-            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
-                       FROM analysis_results 
-                       WHERE user_id = %s 
-                       ORDER BY created_at DESC"""
-            cursor.execute(query, (user_id,))
-            analyses = cursor.fetchall()
-            return render_template('saved_analyses.html', analyses=analyses)
-        except Error as e:
-            print(f"Error while fetching saved analyses: {e}")
-            return jsonify({"error": "Failed to fetch saved analyses"}), 500
-        finally:
-            if connection.is_connected():
-                cursor.close()
-                connection.close()
-    return jsonify({"error": "Database connection failed"}), 500
+
 
 
 def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_used=None, reddit_requests_count=None, additional_info=None):
@@ -690,14 +675,36 @@ def analysis_list():
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
     
-    if source == 'job' and job_id:
-        analyses = get_job_analyses(job_id)
-        title = f"Job #{job_id} Results"
-    else:
-        analyses = get_saved_analyses(user_id)
-        title = "Your Saved Analyses"
-    
-    return render_template('analysis_list.html', analyses=analyses, title=title)
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            if source == 'job' and job_id:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s AND job_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, job_id))
+                analyses = cursor.fetchall()
+                title = f"Job #{job_id} Results"
+            else:
+                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                           FROM analysis_results 
+                           WHERE user_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id,))
+                analyses = cursor.fetchall()
+                title = "Your Saved Analyses"
+            
+            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+        except Error as e:
+            print(f"Error while fetching analyses: {e}")
+            return jsonify({"error": "Failed to fetch analyses"}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -765,6 +772,99 @@ def get_analysis_by_id(analysis_id):
                 cursor.close()
                 connection.close()
     return None
+
+
+@app.route('/usage_statistics')
+def usage_statistics():
+    user_id = session.get('user_id', 'anonymous')
+    last_24_hours = datetime.now() - timedelta(days=1)
+    
+    # Get total usage
+    openai_usage, reddit_usage = get_total_usage(user_id, last_24_hours)
+    
+    # Get hourly usage
+    openai_hourly, reddit_hourly = get_hourly_usage(user_id, last_24_hours)
+    
+    # Generate charts
+    openai_chart = generate_chart(openai_hourly, "OpenAI API Usage (Tokens)")
+    reddit_chart = generate_chart(reddit_hourly, "Reddit API Usage (Requests)")
+    
+    return render_template('usage_statistics.html', 
+                           openai_usage=openai_usage,
+                           reddit_usage=reddit_usage,
+                           openai_chart=openai_chart,
+                           reddit_chart=reddit_chart)
+
+def get_total_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            """
+            cursor.execute(query, (user_id, start_time))
+            result = cursor.fetchone()
+            return result[0] or 0, result[1] or 0
+        finally:
+            cursor.close()
+            connection.close()
+    return 0, 0
+
+def get_hourly_usage(user_id, start_time):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = """
+            SELECT 
+                DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as hour,
+                SUM(CASE WHEN api_type = 'openai' THEN openai_tokens_used ELSE 0 END) as openai_total,
+                SUM(CASE WHEN api_type = 'reddit' THEN reddit_requests_count ELSE 0 END) as reddit_total
+            FROM api_request_logs
+            WHERE user_id = %s AND timestamp >= %s
+            GROUP BY hour
+            ORDER BY hour
+            """
+            cursor.execute(query, (user_id, start_time))
+            results = cursor.fetchall()
+            
+            # Create a dictionary to store results
+            hourly_data = {(start_time + timedelta(hours=i)).strftime('%Y-%m-%d %H:00:00'): (0, 0) for i in range(24)}
+            
+            for row in results:
+                hourly_data[row[0]] = (row[1] or 0, row[2] or 0)
+            
+            hours = [datetime.strptime(h, '%Y-%m-%d %H:%M:%S') for h in hourly_data.keys()]
+            openai_usage = [data[0] for data in hourly_data.values()]
+            reddit_usage = [data[1] for data in hourly_data.values()]
+            
+            return (hours, openai_usage), (hours, reddit_usage)
+        finally:
+            cursor.close()
+            connection.close()
+    return ([], []), ([], [])
+
+def generate_chart(data, title):
+    hours, usage = data
+    plt.figure(figsize=(10, 5))
+    plt.bar(range(len(hours)), usage)
+    plt.title(title)
+    plt.xlabel('Hour')
+    plt.ylabel('Usage')
+    plt.xticks(range(len(hours)), [h.strftime('%H:%M') for h in hours], rotation=45)
+    plt.tight_layout()
+    
+    img = io.BytesIO()
+    plt.savefig(img, format='png')
+    img.seek(0)
+    plt.close()  # Close the figure to free up memory
+    
+    return base64.b64encode(img.getvalue()).decode()
 
 
 if __name__ == '__main__':
