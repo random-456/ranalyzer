@@ -1485,34 +1485,103 @@ def get_job_analyses(job_id):
     return []
 
 
+@app.route('/add_job_to_folder', methods=['POST'])
+def add_job_to_folder():
+    user_id = session.get('user_id', 'anonymous')
+    folder_id = request.json['folder_id']
+    job_id = request.json['job_id']
+    
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            
+            # Get all analysis IDs for the job that are not already in the folder
+            query = """
+                SELECT id FROM analysis_results 
+                WHERE user_id = %s AND job_id = %s AND (folder_id IS NULL OR folder_id != %s)
+            """
+            cursor.execute(query, (user_id, job_id, folder_id))
+            analysis_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Update the folder_id for these analyses
+            if analysis_ids:
+                update_query = """
+                    UPDATE analysis_results 
+                    SET folder_id = %s 
+                    WHERE id IN ({})
+                """.format(','.join(['%s'] * len(analysis_ids)))
+                cursor.execute(update_query, [folder_id] + analysis_ids)
+                
+            connection.commit()
+            return jsonify({"success": True})
+        except Error as e:
+            print(f"Error adding job to folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"success": False, "error": "Database connection failed"}), 500
+
 @app.route('/analyses')
 def analysis_list():
     user_id = session.get('user_id', 'anonymous')
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
+    folder_id = request.args.get('folder_id')
     
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor(dictionary=True)
-            if source == 'job' and job_id:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+            
+            if folder_id:
+                # Fetch analyses for a specific folder
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
+                           FROM analysis_results 
+                           WHERE user_id = %s AND folder_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, folder_id))
+                analyses = cursor.fetchall()
+                folder = get_folder_by_id(folder_id)
+                title = f"Folder: {folder['name']}" if folder else "Unknown Folder"
+                folders = []  # No folders shown when inside a folder
+            elif source == 'job' and job_id:
+                # Fetch analyses for a specific job
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
                            WHERE user_id = %s AND job_id = %s
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id, job_id))
                 analyses = cursor.fetchall()
                 title = f"Job #{job_id} Results"
+                folders = []  # No folders shown for job results
             else:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                # Fetch folders and root-level analyses
+                folders = get_user_folders(user_id)
+                for folder in folders:
+                    folder['count'] = get_folder_analysis_count(folder['id'])
+                
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
-                           WHERE user_id = %s
+                           WHERE user_id = %s AND folder_id IS NULL
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id,))
                 analyses = cursor.fetchall()
-                title = "Your Saved Analyses"
+                title = "Your Analyses and Folders"
             
-            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+            # Fetch all folders for the "Add to Folder" modal
+            all_folders = get_user_folders(user_id) if job_id else []
+            
+            return render_template('analysis_list.html', 
+                                   analyses=analyses, 
+                                   folders=folders, 
+                                   all_folders=all_folders,
+                                   title=title, 
+                                   source=source, 
+                                   job_id=job_id, 
+                                   current_folder_id=folder_id)
         except Error as e:
             print(f"Error while fetching analyses: {e}")
             return jsonify({"error": "Failed to fetch analyses"}), 500
@@ -1521,6 +1590,38 @@ def analysis_list():
                 cursor.close()
                 connection.close()
     return jsonify({"error": "Database connection failed"}), 500
+
+def get_folder_analysis_count(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = "SELECT COUNT(*) FROM analysis_results WHERE folder_id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()[0]
+        except Error as e:
+            print(f"Error fetching folder analysis count: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return 0
+
+def get_folder_by_id(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()
+        except Error as e:
+            print(f"Error fetching folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -1681,6 +1782,56 @@ def generate_chart(data, title):
     plt.close()  # Close the figure to free up memory
     
     return base64.b64encode(img.getvalue()).decode()
+
+
+def create_folder(user_id, folder_name):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            folder_id = str(uuid.uuid4())
+            query = "INSERT INTO folders (id, user_id, name) VALUES (%s, %s, %s)"
+            cursor.execute(query, (folder_id, user_id, folder_name))
+            connection.commit()
+            return folder_id
+        except Error as e:
+            print(f"Error creating folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
+
+def get_user_folders(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE user_id = %s ORDER BY name"
+            cursor.execute(query, (user_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching user folders: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+@app.route('/create_folder', methods=['POST'])
+def create_folder_route():
+    user_id = session.get('user_id', 'anonymous')
+    folder_name = request.json['folder_name']
+    folder_id = create_folder(user_id, folder_name)
+    if folder_id:
+        return jsonify({"success": True, "folder_id": folder_id, "folder_name": folder_name})
+    return jsonify({"success": False, "error": "Failed to create folder"}), 500
+
+@app.route('/get_folders', methods=['GET'])
+def get_folders_route():
+    user_id = session.get('user_id', 'anonymous')
+    folders = get_user_folders(user_id)
+    return jsonify(folders)
 
 
 if __name__ == '__main__':
@@ -1929,34 +2080,154 @@ if __name__ == '__main__':
 {% extends "base.html" %}
 
 {% block content %}
-{% if 'Job #' in title %}
-    <h1 class="mb-2">Job Results</h1>
-    <p class="text-muted mb-4">Job ID: {{ title.split('#')[1].split(' ')[0] }}</p>
-{% else %}
-    <h1 class="mb-4">{{ title }}</h1>
+<h1 class="mb-4">{{ title }}</h1>
+
+{% if not current_folder_id and not job_id %}
+    <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addFolderModal">
+        Add Folder
+    </button>
 {% endif %}
 
-{% if analyses %}
-    <div class="list-group">
+{% if job_id %}
+    <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addToFolderModal">
+        Add All to Folder
+    </button>
+{% endif %}
+
+<div class="list-group">
+    {% for folder in folders %}
+        <a href="{{ url_for('analysis_list', folder_id=folder.id) }}" class="list-group-item list-group-item-action gradient-highlight">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">Folder: {{ folder.name }}</h5>
+                <small>{{ folder.count }} analyses</small>
+            </div>
+        </a>
+    {% endfor %}
+
     {% for analysis in analyses %}
         <a href="{{ url_for('analysis_detail', analysis_id=analysis.id, source=source, job_id=job_id) }}" class="list-group-item list-group-item-action">
             <div class="d-flex w-100 justify-content-between">
                 <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
-            <p class="mb-1">Topic: {{ analysis.topic or 'N/A' }}</p>
             <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
             {% if analysis.job_id %}
                 <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
-            {% else %}
-                <small>Individual Analysis</small>
             {% endif %}
         </a>
     {% endfor %}
-    </div>
-{% else %}
-    <p>No analyses found.</p>
+</div>
+
+{% if not folders and not analyses %}
+    <p>No analyses or folders found.</p>
 {% endif %}
+
+<!-- Add Folder Modal -->
+<div class="modal fade" id="addFolderModal" tabindex="-1" aria-labelledby="addFolderModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addFolderModalLabel">Add New Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addFolderForm">
+                    <div class="mb-3">
+                        <label for="folderName" class="form-label">Folder Name</label>
+                        <input type="text" class="form-control" id="folderName" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="createFolderBtn">Create Folder</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add to Folder Modal -->
+{% if job_id %}
+<div class="modal fade" id="addToFolderModal" tabindex="-1" aria-labelledby="addToFolderModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addToFolderModalLabel">Add All to Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addToFolderForm">
+                    <div class="mb-3">
+                        <label for="folderSelect" class="form-label">Select Folder</label>
+                        <select class="form-select" id="folderSelect" required>
+                            {% for folder in all_folders %}
+                                <option value="{{ folder.id }}">{{ folder.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="addToFolderBtn">Add to Folder</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('createFolderBtn').addEventListener('click', function() {
+    const folderName = document.getElementById('folderName').value;
+    fetch('/create_folder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({folder_name: folderName}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();  // Reload the page to show the new folder
+        } else {
+            alert('Failed to create folder. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+});
+
+{% if job_id %}
+document.getElementById('addToFolderBtn').addEventListener('click', function() {
+    const folderId = document.getElementById('folderSelect').value;
+    fetch('/add_job_to_folder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({folder_id: folderId, job_id: '{{ job_id }}'}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Successfully added analyses to folder.');
+            location.reload();
+        } else {
+            alert('Failed to add analyses to folder. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+});
+{% endif %}
+</script>
 {% endblock %}
 
 ########## templates/usage_statistics.html ##########
@@ -3574,34 +3845,103 @@ def get_job_analyses(job_id):
     return []
 
 
+@app.route('/add_job_to_folder', methods=['POST'])
+def add_job_to_folder():
+    user_id = session.get('user_id', 'anonymous')
+    folder_id = request.json['folder_id']
+    job_id = request.json['job_id']
+    
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            
+            # Get all analysis IDs for the job that are not already in the folder
+            query = """
+                SELECT id FROM analysis_results 
+                WHERE user_id = %s AND job_id = %s AND (folder_id IS NULL OR folder_id != %s)
+            """
+            cursor.execute(query, (user_id, job_id, folder_id))
+            analysis_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Update the folder_id for these analyses
+            if analysis_ids:
+                update_query = """
+                    UPDATE analysis_results 
+                    SET folder_id = %s 
+                    WHERE id IN ({})
+                """.format(','.join(['%s'] * len(analysis_ids)))
+                cursor.execute(update_query, [folder_id] + analysis_ids)
+                
+            connection.commit()
+            return jsonify({"success": True})
+        except Error as e:
+            print(f"Error adding job to folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"success": False, "error": "Database connection failed"}), 500
+
 @app.route('/analyses')
 def analysis_list():
     user_id = session.get('user_id', 'anonymous')
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
+    folder_id = request.args.get('folder_id')
     
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor(dictionary=True)
-            if source == 'job' and job_id:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+            
+            if folder_id:
+                # Fetch analyses for a specific folder
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
+                           FROM analysis_results 
+                           WHERE user_id = %s AND folder_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, folder_id))
+                analyses = cursor.fetchall()
+                folder = get_folder_by_id(folder_id)
+                title = f"Folder: {folder['name']}" if folder else "Unknown Folder"
+                folders = []  # No folders shown when inside a folder
+            elif source == 'job' and job_id:
+                # Fetch analyses for a specific job
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
                            WHERE user_id = %s AND job_id = %s
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id, job_id))
                 analyses = cursor.fetchall()
                 title = f"Job #{job_id} Results"
+                folders = []  # No folders shown for job results
             else:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                # Fetch folders and root-level analyses
+                folders = get_user_folders(user_id)
+                for folder in folders:
+                    folder['count'] = get_folder_analysis_count(folder['id'])
+                
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
-                           WHERE user_id = %s
+                           WHERE user_id = %s AND folder_id IS NULL
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id,))
                 analyses = cursor.fetchall()
-                title = "Your Saved Analyses"
+                title = "Your Analyses and Folders"
             
-            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+            # Fetch all folders for the "Add to Folder" modal
+            all_folders = get_user_folders(user_id) if job_id else []
+            
+            return render_template('analysis_list.html', 
+                                   analyses=analyses, 
+                                   folders=folders, 
+                                   all_folders=all_folders,
+                                   title=title, 
+                                   source=source, 
+                                   job_id=job_id, 
+                                   current_folder_id=folder_id)
         except Error as e:
             print(f"Error while fetching analyses: {e}")
             return jsonify({"error": "Failed to fetch analyses"}), 500
@@ -3610,6 +3950,38 @@ def analysis_list():
                 cursor.close()
                 connection.close()
     return jsonify({"error": "Database connection failed"}), 500
+
+def get_folder_analysis_count(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = "SELECT COUNT(*) FROM analysis_results WHERE folder_id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()[0]
+        except Error as e:
+            print(f"Error fetching folder analysis count: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return 0
+
+def get_folder_by_id(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()
+        except Error as e:
+            print(f"Error fetching folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -3770,6 +4142,56 @@ def generate_chart(data, title):
     plt.close()  # Close the figure to free up memory
     
     return base64.b64encode(img.getvalue()).decode()
+
+
+def create_folder(user_id, folder_name):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            folder_id = str(uuid.uuid4())
+            query = "INSERT INTO folders (id, user_id, name) VALUES (%s, %s, %s)"
+            cursor.execute(query, (folder_id, user_id, folder_name))
+            connection.commit()
+            return folder_id
+        except Error as e:
+            print(f"Error creating folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
+
+def get_user_folders(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE user_id = %s ORDER BY name"
+            cursor.execute(query, (user_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching user folders: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+@app.route('/create_folder', methods=['POST'])
+def create_folder_route():
+    user_id = session.get('user_id', 'anonymous')
+    folder_name = request.json['folder_name']
+    folder_id = create_folder(user_id, folder_name)
+    if folder_id:
+        return jsonify({"success": True, "folder_id": folder_id, "folder_name": folder_name})
+    return jsonify({"success": False, "error": "Failed to create folder"}), 500
+
+@app.route('/get_folders', methods=['GET'])
+def get_folders_route():
+    user_id = session.get('user_id', 'anonymous')
+    folders = get_user_folders(user_id)
+    return jsonify(folders)
 
 
 if __name__ == '__main__':
@@ -4018,34 +4440,154 @@ if __name__ == '__main__':
 {% extends "base.html" %}
 
 {% block content %}
-{% if 'Job #' in title %}
-    <h1 class="mb-2">Job Results</h1>
-    <p class="text-muted mb-4">Job ID: {{ title.split('#')[1].split(' ')[0] }}</p>
-{% else %}
-    <h1 class="mb-4">{{ title }}</h1>
+<h1 class="mb-4">{{ title }}</h1>
+
+{% if not current_folder_id and not job_id %}
+    <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addFolderModal">
+        Add Folder
+    </button>
 {% endif %}
 
-{% if analyses %}
-    <div class="list-group">
+{% if job_id %}
+    <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addToFolderModal">
+        Add All to Folder
+    </button>
+{% endif %}
+
+<div class="list-group">
+    {% for folder in folders %}
+        <a href="{{ url_for('analysis_list', folder_id=folder.id) }}" class="list-group-item list-group-item-action gradient-highlight">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">Folder: {{ folder.name }}</h5>
+                <small>{{ folder.count }} analyses</small>
+            </div>
+        </a>
+    {% endfor %}
+
     {% for analysis in analyses %}
         <a href="{{ url_for('analysis_detail', analysis_id=analysis.id, source=source, job_id=job_id) }}" class="list-group-item list-group-item-action">
             <div class="d-flex w-100 justify-content-between">
                 <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
                 <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
             </div>
-            <p class="mb-1">Topic: {{ analysis.topic or 'N/A' }}</p>
             <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
             {% if analysis.job_id %}
                 <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
-            {% else %}
-                <small>Individual Analysis</small>
             {% endif %}
         </a>
     {% endfor %}
-    </div>
-{% else %}
-    <p>No analyses found.</p>
+</div>
+
+{% if not folders and not analyses %}
+    <p>No analyses or folders found.</p>
 {% endif %}
+
+<!-- Add Folder Modal -->
+<div class="modal fade" id="addFolderModal" tabindex="-1" aria-labelledby="addFolderModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addFolderModalLabel">Add New Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addFolderForm">
+                    <div class="mb-3">
+                        <label for="folderName" class="form-label">Folder Name</label>
+                        <input type="text" class="form-control" id="folderName" required>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="createFolderBtn">Create Folder</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add to Folder Modal -->
+{% if job_id %}
+<div class="modal fade" id="addToFolderModal" tabindex="-1" aria-labelledby="addToFolderModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="addToFolderModalLabel">Add All to Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addToFolderForm">
+                    <div class="mb-3">
+                        <label for="folderSelect" class="form-label">Select Folder</label>
+                        <select class="form-select" id="folderSelect" required>
+                            {% for folder in all_folders %}
+                                <option value="{{ folder.id }}">{{ folder.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="addToFolderBtn">Add to Folder</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('createFolderBtn').addEventListener('click', function() {
+    const folderName = document.getElementById('folderName').value;
+    fetch('/create_folder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({folder_name: folderName}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            location.reload();  // Reload the page to show the new folder
+        } else {
+            alert('Failed to create folder. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+});
+
+{% if job_id %}
+document.getElementById('addToFolderBtn').addEventListener('click', function() {
+    const folderId = document.getElementById('folderSelect').value;
+    fetch('/add_job_to_folder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({folder_id: folderId, job_id: '{{ job_id }}'}),
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Successfully added analyses to folder.');
+            location.reload();
+        } else {
+            alert('Failed to add analyses to folder. Please try again.');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('An error occurred. Please try again.');
+    });
+});
+{% endif %}
+</script>
 {% endblock %}
 
 ########## templates/usage_statistics.html ##########

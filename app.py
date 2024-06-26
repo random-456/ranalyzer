@@ -669,34 +669,103 @@ def get_job_analyses(job_id):
     return []
 
 
+@app.route('/add_job_to_folder', methods=['POST'])
+def add_job_to_folder():
+    user_id = session.get('user_id', 'anonymous')
+    folder_id = request.json['folder_id']
+    job_id = request.json['job_id']
+    
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            
+            # Get all analysis IDs for the job that are not already in the folder
+            query = """
+                SELECT id FROM analysis_results 
+                WHERE user_id = %s AND job_id = %s AND (folder_id IS NULL OR folder_id != %s)
+            """
+            cursor.execute(query, (user_id, job_id, folder_id))
+            analysis_ids = [row[0] for row in cursor.fetchall()]
+            
+            # Update the folder_id for these analyses
+            if analysis_ids:
+                update_query = """
+                    UPDATE analysis_results 
+                    SET folder_id = %s 
+                    WHERE id IN ({})
+                """.format(','.join(['%s'] * len(analysis_ids)))
+                cursor.execute(update_query, [folder_id] + analysis_ids)
+                
+            connection.commit()
+            return jsonify({"success": True})
+        except Error as e:
+            print(f"Error adding job to folder: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return jsonify({"success": False, "error": "Database connection failed"}), 500
+
 @app.route('/analyses')
 def analysis_list():
     user_id = session.get('user_id', 'anonymous')
     source = request.args.get('source', 'saved')
     job_id = request.args.get('job_id')
+    folder_id = request.args.get('folder_id')
     
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor(dictionary=True)
-            if source == 'job' and job_id:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+            
+            if folder_id:
+                # Fetch analyses for a specific folder
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
+                           FROM analysis_results 
+                           WHERE user_id = %s AND folder_id = %s
+                           ORDER BY created_at DESC"""
+                cursor.execute(query, (user_id, folder_id))
+                analyses = cursor.fetchall()
+                folder = get_folder_by_id(folder_id)
+                title = f"Folder: {folder['name']}" if folder else "Unknown Folder"
+                folders = []  # No folders shown when inside a folder
+            elif source == 'job' and job_id:
+                # Fetch analyses for a specific job
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
                            WHERE user_id = %s AND job_id = %s
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id, job_id))
                 analyses = cursor.fetchall()
                 title = f"Job #{job_id} Results"
+                folders = []  # No folders shown for job results
             else:
-                query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id 
+                # Fetch folders and root-level analyses
+                folders = get_user_folders(user_id)
+                for folder in folders:
+                    folder['count'] = get_folder_analysis_count(folder['id'])
+                
+                query = """SELECT id, subreddit, post_title, business_model_title, created_at, job_id
                            FROM analysis_results 
-                           WHERE user_id = %s
+                           WHERE user_id = %s AND folder_id IS NULL
                            ORDER BY created_at DESC"""
                 cursor.execute(query, (user_id,))
                 analyses = cursor.fetchall()
-                title = "Your Saved Analyses"
+                title = "Your Analyses and Folders"
             
-            return render_template('analysis_list.html', analyses=analyses, title=title, source=source, job_id=job_id)
+            # Fetch all folders for the "Add to Folder" modal
+            all_folders = get_user_folders(user_id) if job_id else []
+            
+            return render_template('analysis_list.html', 
+                                   analyses=analyses, 
+                                   folders=folders, 
+                                   all_folders=all_folders,
+                                   title=title, 
+                                   source=source, 
+                                   job_id=job_id, 
+                                   current_folder_id=folder_id)
         except Error as e:
             print(f"Error while fetching analyses: {e}")
             return jsonify({"error": "Failed to fetch analyses"}), 500
@@ -705,6 +774,38 @@ def analysis_list():
                 cursor.close()
                 connection.close()
     return jsonify({"error": "Database connection failed"}), 500
+
+def get_folder_analysis_count(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            query = "SELECT COUNT(*) FROM analysis_results WHERE folder_id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()[0]
+        except Error as e:
+            print(f"Error fetching folder analysis count: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return 0
+
+def get_folder_by_id(folder_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE id = %s"
+            cursor.execute(query, (folder_id,))
+            return cursor.fetchone()
+        except Error as e:
+            print(f"Error fetching folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 @app.route('/analysis/<string:analysis_id>')
 def analysis_detail(analysis_id):
@@ -865,6 +966,56 @@ def generate_chart(data, title):
     plt.close()  # Close the figure to free up memory
     
     return base64.b64encode(img.getvalue()).decode()
+
+
+def create_folder(user_id, folder_name):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor()
+            folder_id = str(uuid.uuid4())
+            query = "INSERT INTO folders (id, user_id, name) VALUES (%s, %s, %s)"
+            cursor.execute(query, (folder_id, user_id, folder_name))
+            connection.commit()
+            return folder_id
+        except Error as e:
+            print(f"Error creating folder: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
+
+def get_user_folders(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = "SELECT * FROM folders WHERE user_id = %s ORDER BY name"
+            cursor.execute(query, (user_id,))
+            return cursor.fetchall()
+        except Error as e:
+            print(f"Error fetching user folders: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+@app.route('/create_folder', methods=['POST'])
+def create_folder_route():
+    user_id = session.get('user_id', 'anonymous')
+    folder_name = request.json['folder_name']
+    folder_id = create_folder(user_id, folder_name)
+    if folder_id:
+        return jsonify({"success": True, "folder_id": folder_id, "folder_name": folder_name})
+    return jsonify({"success": False, "error": "Failed to create folder"}), 500
+
+@app.route('/get_folders', methods=['GET'])
+def get_folders_route():
+    user_id = session.get('user_id', 'anonymous')
+    folders = get_user_folders(user_id)
+    return jsonify(folders)
 
 
 if __name__ == '__main__':
