@@ -788,17 +788,39 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
     if connection:
         try:
             cursor = connection.cursor()
+            analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
             query = """INSERT INTO analysis_results 
-                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id))
+                       (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            values = (analysis_id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id)
+            print(f"Attempting to insert with values: {values}")  # Debug print
+            cursor.execute(query, values)
             connection.commit()
+            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")  # Debug print
+            return analysis_id
+        except mysql.connector.IntegrityError as e:
+            print(f"IntegrityError: {e}")
+            print(f"Error code: {e.errno}")
+            print(f"SQL State: {e.sqlstate}")
+            print(f"Message: {e.msg}")
+            if e.errno == 1062:  # Duplicate entry
+                # Try to update instead
+                update_query = """UPDATE analysis_results 
+                                  SET topic = %s, subreddit = %s, post_title = %s, analysis = %s, 
+                                      business_model_title = %s, job_id = %s
+                                  WHERE user_id = %s AND post_id = %s"""
+                update_values = (topic, subreddit, post_title, analysis, business_model_title, job_id, user_id, post_id)
+                cursor.execute(update_query, update_values)
+                connection.commit()
+                print(f"Updated existing analysis for user_id: {user_id}, post_id: {post_id}")
+                return post_id  # Return post_id as identifier for updated row
         except Error as e:
             print(f"Error while saving analysis: {e}")
         finally:
             if connection.is_connected():
                 cursor.close()
                 connection.close()
+    return None
 
 
 def get_user_profile_data(user_id):
@@ -822,7 +844,7 @@ def get_user_profile_data(user_id):
 @app.route('/')
 def index():
     if 'user_id' not in session:
-        session['user_id'] = str(uuid.uuid4())  # Generate a unique ID for the session
+        session['user_id'] = str(uuid.uuid4())
     return render_template('index.html')
 
 @app.route('/search_subreddits', methods=['POST'])
@@ -944,7 +966,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
     reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
     
-    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Retrieve post {post_id}")
     
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
@@ -973,6 +995,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
 
     Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
+    print(f"Analyzing post {post_id} for job {job_id}")  # Debug print
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -980,15 +1003,40 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
             {"role": "user", "content": full_content}
         ]
     )
-    analysis = completion.choices[0].message.content
-    tokens_used = completion.usage.total_tokens
-    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
-    analysis_json = json.loads(analysis)
-    business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+    try:
+        analysis = completion.choices[0].message.content
+        tokens_used = completion.usage.total_tokens
+        log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
+        
+        analysis_json = json.loads(analysis)
+        business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON for post {post_id}: {analysis}")
+        business_model_title = 'Error in Analysis'
+        analysis = json.dumps({"error": "Failed to parse analysis"})
+    except Exception as e:
+        print(f"Unexpected error processing analysis for post {post_id}: {str(e)}")
+        business_model_title = 'Error in Analysis'
+        analysis = json.dumps({"error": "Unexpected error during analysis"})
 
     # Save the analysis to the database
-    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title, job_id=job_id)
+    print(f"Saving analysis for post {post_id} with job ID {job_id}")  # Debug print
+    analysis_id = save_analysis(
+        user_id=user_id,
+        topic=topic,
+        subreddit=subreddit,
+        post_id=post_id,
+        post_title=submission.title,
+        analysis=analysis,
+        business_model_title=business_model_title,
+        job_id=job_id
+    )
     
+    if analysis_id:
+        print(f"Successfully saved analysis for post {post_id} with ID {analysis_id}")
+    else:
+        print(f"Failed to save analysis for post {post_id}")
+
     return analysis
 
 
@@ -1146,17 +1194,21 @@ def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_use
 
 @celery.task(bind=True)
 def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
+    print(f"Starting mass analysis for job {job_id}")
     job = update_job_status(job_id, 'in_progress')
     
     posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
+    print(f"Found {len(posts)} unanalyzed posts")
     for i, post in enumerate(posts):
         try:
-            analyze_post_internal(post.id, '', subreddit, user_id, job_id)
+            analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
             update_job_progress(job_id, i + 1)
+            print(f"Analyzed post {i+1}/{len(posts)} for job {job_id}")
         except Exception as e:
-            print(f"Error analyzing post {post.id}: {str(e)}")
+            print(f"Error analyzing post {post.id} for job {job_id}: {str(e)}")
     
     update_job_status(job_id, 'completed')
+    print(f"Completed mass analysis for job {job_id}")
 
 
 @app.route('/start_mass_analysis', methods=['POST'])
@@ -1224,12 +1276,13 @@ def create_mass_analysis_job(user_id, subreddit, num_posts):
         connection = create_db_connection()
         if connection:
             cursor = connection.cursor()
+            job_id = str(uuid.uuid4())
             query = """INSERT INTO mass_analysis_jobs 
-                       (user_id, subreddit, total_posts, status) 
-                       VALUES (%s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, subreddit, num_posts, 'pending'))
+                       (id, user_id, subreddit, total_posts, status) 
+                       VALUES (%s, %s, %s, %s, %s)"""
+            cursor.execute(query, (job_id, user_id, subreddit, num_posts, 'pending'))
             connection.commit()
-            return cursor.lastrowid
+            return job_id
         else:
             app.logger.error("Failed to create database connection")
             return None
@@ -1352,6 +1405,89 @@ def get_job_analyses(job_id):
                 cursor.close()
                 connection.close()
     return []
+
+
+@app.route('/analyses')
+def analysis_list():
+    user_id = session.get('user_id', 'anonymous')
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    
+    if source == 'job' and job_id:
+        analyses = get_job_analyses(job_id)
+        title = f"Job #{job_id} Results"
+    else:
+        analyses = get_saved_analyses(user_id)
+        title = "Your Saved Analyses"
+    
+    return render_template('analysis_list.html', analyses=analyses, title=title)
+
+@app.route('/analysis/<string:analysis_id>')
+def analysis_detail(analysis_id):
+    analysis = get_analysis_by_id(analysis_id)
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    return render_template('analysis_detail.html', analysis=analysis, source=source, job_id=job_id)
+
+
+def get_saved_analyses(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s AND job_id IS NULL
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_job_analyses(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE job_id = %s
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (job_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching job analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_analysis_by_id(analysis_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id
+                       FROM analysis_results 
+                       WHERE id = %s"""
+            cursor.execute(query, (analysis_id,))
+            analysis = cursor.fetchone()
+            return analysis
+        except Error as e:
+            print(f"Error while fetching analysis by ID: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 
 if __name__ == '__main__':
@@ -1539,7 +1675,7 @@ if __name__ == '__main__':
     <div id="menuDropdown" class="menu-dropdown">
         <ul class="list-unstyled">
             <li><a href="/">Analyzer</a></li>
-            <li><a href="/saved_analyses">Saved Analyses</a></li>
+            <li><a href="{{ url_for('analysis_list', source='saved') }}">Saved Analyses</a></li>
             <li><a href="/mass_analysis_jobs">Mass Analysis Jobs</a></li>
         </ul>
     </div>
@@ -1646,12 +1782,73 @@ if __name__ == '__main__':
             <td>{{ job.status }}</td>
             <td>{{ job.created_at }}</td>
             <td>
-                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+                <a href="{{ url_for('analysis_list', source='job', job_id=job.id) }}" class="btn btn-primary">View Results</a>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+{% endblock %}
+
+########## templates/analysis_list.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ title }}</h1>
+
+{% if analyses %}
+    <div class="list-group">
+    {% for analysis in analyses %}
+        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id) }}" class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
+                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
+        </a>
+    {% endfor %}
+    </div>
+{% else %}
+    <p>No analyses found.</p>
+{% endif %}
+{% endblock %}
+
+########## templates/analysis_detail.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ analysis.business_model_title }}</h1>
+
+<h6>Original Post: {{ analysis.post_title }}</h6>
+<p><strong>Topic:</strong> {{ analysis.topic }}</p>
+<p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
+<p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+<p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
+
+<h6 class="mt-4">Analysis:</h6>
+{% set analysis_data = analysis.analysis|from_json %}
+{% if analysis_data.problem_identified %}
+    <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
+    <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
+    <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
+    <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
+    <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
+    <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
+    <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
+{% else %}
+    <p>{{ analysis_data.analysis }}</p>
+    <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
+{% endif %}
+
+<a href="{{ url_for('analysis_list', source=source, job_id=job_id) }}" class="btn btn-primary mt-3">Back to List</a>
 {% endblock %}
 
 ########## templates/job_results.html ##########
@@ -2512,17 +2709,39 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
     if connection:
         try:
             cursor = connection.cursor()
+            analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
             query = """INSERT INTO analysis_results 
-                       (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id))
+                       (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            values = (analysis_id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id)
+            print(f"Attempting to insert with values: {values}")  # Debug print
+            cursor.execute(query, values)
             connection.commit()
+            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")  # Debug print
+            return analysis_id
+        except mysql.connector.IntegrityError as e:
+            print(f"IntegrityError: {e}")
+            print(f"Error code: {e.errno}")
+            print(f"SQL State: {e.sqlstate}")
+            print(f"Message: {e.msg}")
+            if e.errno == 1062:  # Duplicate entry
+                # Try to update instead
+                update_query = """UPDATE analysis_results 
+                                  SET topic = %s, subreddit = %s, post_title = %s, analysis = %s, 
+                                      business_model_title = %s, job_id = %s
+                                  WHERE user_id = %s AND post_id = %s"""
+                update_values = (topic, subreddit, post_title, analysis, business_model_title, job_id, user_id, post_id)
+                cursor.execute(update_query, update_values)
+                connection.commit()
+                print(f"Updated existing analysis for user_id: {user_id}, post_id: {post_id}")
+                return post_id  # Return post_id as identifier for updated row
         except Error as e:
             print(f"Error while saving analysis: {e}")
         finally:
             if connection.is_connected():
                 cursor.close()
                 connection.close()
+    return None
 
 
 def get_user_profile_data(user_id):
@@ -2546,7 +2765,7 @@ def get_user_profile_data(user_id):
 @app.route('/')
 def index():
     if 'user_id' not in session:
-        session['user_id'] = str(uuid.uuid4())  # Generate a unique ID for the session
+        session['user_id'] = str(uuid.uuid4())
     return render_template('index.html')
 
 @app.route('/search_subreddits', methods=['POST'])
@@ -2668,7 +2887,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
     reddit_requests_count += 1  # Increment for replace_more()
     comments = [comment.body for comment in submission.comments.list()[:10]]
     
-    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Analyze post {post_id}")
+    log_api_request('reddit', user_id, None, None, reddit_requests_count, f"Retrieve post {post_id}")
     
     full_content = content + "\n\nComments:\n" + "\n\n".join(comments)
 
@@ -2697,6 +2916,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
 
     Remember, only suggest practical and ethical business ideas that align with the user's profile. Do not invent or assume information not present in the provided content."""
 
+    print(f"Analyzing post {post_id} for job {job_id}")  # Debug print
     completion = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
@@ -2704,15 +2924,40 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
             {"role": "user", "content": full_content}
         ]
     )
-    analysis = completion.choices[0].message.content
-    tokens_used = completion.usage.total_tokens
-    log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
-    analysis_json = json.loads(analysis)
-    business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+    try:
+        analysis = completion.choices[0].message.content
+        tokens_used = completion.usage.total_tokens
+        log_api_request('openai', user_id, 'gpt-3.5-turbo', tokens_used, None, "Analyze post")
+        
+        analysis_json = json.loads(analysis)
+        business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON for post {post_id}: {analysis}")
+        business_model_title = 'Error in Analysis'
+        analysis = json.dumps({"error": "Failed to parse analysis"})
+    except Exception as e:
+        print(f"Unexpected error processing analysis for post {post_id}: {str(e)}")
+        business_model_title = 'Error in Analysis'
+        analysis = json.dumps({"error": "Unexpected error during analysis"})
 
     # Save the analysis to the database
-    save_analysis(user_id, topic, subreddit, post_id, submission.title, analysis, business_model_title, job_id=job_id)
+    print(f"Saving analysis for post {post_id} with job ID {job_id}")  # Debug print
+    analysis_id = save_analysis(
+        user_id=user_id,
+        topic=topic,
+        subreddit=subreddit,
+        post_id=post_id,
+        post_title=submission.title,
+        analysis=analysis,
+        business_model_title=business_model_title,
+        job_id=job_id
+    )
     
+    if analysis_id:
+        print(f"Successfully saved analysis for post {post_id} with ID {analysis_id}")
+    else:
+        print(f"Failed to save analysis for post {post_id}")
+
     return analysis
 
 
@@ -2870,17 +3115,21 @@ def log_api_request(api_type, user_id=None, openai_model=None, openai_tokens_use
 
 @celery.task(bind=True)
 def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
+    print(f"Starting mass analysis for job {job_id}")
     job = update_job_status(job_id, 'in_progress')
     
     posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
+    print(f"Found {len(posts)} unanalyzed posts")
     for i, post in enumerate(posts):
         try:
-            analyze_post_internal(post.id, '', subreddit, user_id, job_id)
+            analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
             update_job_progress(job_id, i + 1)
+            print(f"Analyzed post {i+1}/{len(posts)} for job {job_id}")
         except Exception as e:
-            print(f"Error analyzing post {post.id}: {str(e)}")
+            print(f"Error analyzing post {post.id} for job {job_id}: {str(e)}")
     
     update_job_status(job_id, 'completed')
+    print(f"Completed mass analysis for job {job_id}")
 
 
 @app.route('/start_mass_analysis', methods=['POST'])
@@ -2948,12 +3197,13 @@ def create_mass_analysis_job(user_id, subreddit, num_posts):
         connection = create_db_connection()
         if connection:
             cursor = connection.cursor()
+            job_id = str(uuid.uuid4())
             query = """INSERT INTO mass_analysis_jobs 
-                       (user_id, subreddit, total_posts, status) 
-                       VALUES (%s, %s, %s, %s)"""
-            cursor.execute(query, (user_id, subreddit, num_posts, 'pending'))
+                       (id, user_id, subreddit, total_posts, status) 
+                       VALUES (%s, %s, %s, %s, %s)"""
+            cursor.execute(query, (job_id, user_id, subreddit, num_posts, 'pending'))
             connection.commit()
-            return cursor.lastrowid
+            return job_id
         else:
             app.logger.error("Failed to create database connection")
             return None
@@ -3076,6 +3326,89 @@ def get_job_analyses(job_id):
                 cursor.close()
                 connection.close()
     return []
+
+
+@app.route('/analyses')
+def analysis_list():
+    user_id = session.get('user_id', 'anonymous')
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    
+    if source == 'job' and job_id:
+        analyses = get_job_analyses(job_id)
+        title = f"Job #{job_id} Results"
+    else:
+        analyses = get_saved_analyses(user_id)
+        title = "Your Saved Analyses"
+    
+    return render_template('analysis_list.html', analyses=analyses, title=title)
+
+@app.route('/analysis/<string:analysis_id>')
+def analysis_detail(analysis_id):
+    analysis = get_analysis_by_id(analysis_id)
+    source = request.args.get('source', 'saved')
+    job_id = request.args.get('job_id')
+    return render_template('analysis_detail.html', analysis=analysis, source=source, job_id=job_id)
+
+
+def get_saved_analyses(user_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE user_id = %s AND job_id IS NULL
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (user_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching saved analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_job_analyses(job_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at 
+                       FROM analysis_results 
+                       WHERE job_id = %s
+                       ORDER BY created_at DESC"""
+            cursor.execute(query, (job_id,))
+            analyses = cursor.fetchall()
+            return analyses
+        except Error as e:
+            print(f"Error while fetching job analyses: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return []
+
+def get_analysis_by_id(analysis_id):
+    connection = create_db_connection()
+    if connection:
+        try:
+            cursor = connection.cursor(dictionary=True)
+            query = """SELECT id, topic, subreddit, post_id, post_title, business_model_title, analysis, created_at, job_id
+                       FROM analysis_results 
+                       WHERE id = %s"""
+            cursor.execute(query, (analysis_id,))
+            analysis = cursor.fetchone()
+            return analysis
+        except Error as e:
+            print(f"Error while fetching analysis by ID: {e}")
+        finally:
+            if connection.is_connected():
+                cursor.close()
+                connection.close()
+    return None
 
 
 if __name__ == '__main__':
@@ -3263,7 +3596,7 @@ if __name__ == '__main__':
     <div id="menuDropdown" class="menu-dropdown">
         <ul class="list-unstyled">
             <li><a href="/">Analyzer</a></li>
-            <li><a href="/saved_analyses">Saved Analyses</a></li>
+            <li><a href="{{ url_for('analysis_list', source='saved') }}">Saved Analyses</a></li>
             <li><a href="/mass_analysis_jobs">Mass Analysis Jobs</a></li>
         </ul>
     </div>
@@ -3370,12 +3703,73 @@ if __name__ == '__main__':
             <td>{{ job.status }}</td>
             <td>{{ job.created_at }}</td>
             <td>
-                <a href="{{ url_for('job_results', job_id=job.id) }}" class="btn btn-primary">View Results</a>
+                <a href="{{ url_for('analysis_list', source='job', job_id=job.id) }}" class="btn btn-primary">View Results</a>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+{% endblock %}
+
+########## templates/analysis_list.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ title }}</h1>
+
+{% if analyses %}
+    <div class="list-group">
+    {% for analysis in analyses %}
+        <a href="{{ url_for('analysis_detail', analysis_id=analysis.id) }}" class="list-group-item list-group-item-action">
+            <div class="d-flex w-100 justify-content-between">
+                <h5 class="mb-1">{{ analysis.business_model_title }}</h5>
+                <small>{{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+            </div>
+            <p class="mb-1">Topic: {{ analysis.topic }}</p>
+            <p class="mb-1">Subreddit: r/{{ analysis.subreddit }}</p>
+            {% if analysis.job_id %}
+                <small>Part of Mass Analysis Job #{{ analysis.job_id }}</small>
+            {% else %}
+                <small>Individual Analysis</small>
+            {% endif %}
+        </a>
+    {% endfor %}
+    </div>
+{% else %}
+    <p>No analyses found.</p>
+{% endif %}
+{% endblock %}
+
+########## templates/analysis_detail.html ##########
+
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="mb-4">{{ analysis.business_model_title }}</h1>
+
+<h6>Original Post: {{ analysis.post_title }}</h6>
+<p><strong>Topic:</strong> {{ analysis.topic }}</p>
+<p><strong>Subreddit:</strong> r/{{ analysis.subreddit }}</p>
+<p><strong>Analyzed on:</strong> {{ analysis.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+<p><strong>Reddit Post:</strong> <a href="https://www.reddit.com/comments/{{ analysis.post_id }}" target="_blank" rel="noopener noreferrer">View original post</a></p>
+
+<h6 class="mt-4">Analysis:</h6>
+{% set analysis_data = analysis.analysis|from_json %}
+{% if analysis_data.problem_identified %}
+    <p><strong>Problem Identified:</strong> {{ analysis_data.problem_identified }}</p>
+    <p><strong>Proposed Solution:</strong> {{ analysis_data.proposed_solution }}</p>
+    <p><strong>Target Market:</strong> {{ analysis_data.target_market }}</p>
+    <p><strong>Potential Revenue Streams:</strong> {{ analysis_data.potential_revenue_streams }}</p>
+    <p><strong>Challenges or Considerations:</strong> {{ analysis_data.challenges_or_considerations }}</p>
+    <p><strong>Market Entry Difficulty:</strong> {{ analysis_data.market_entry_difficulty }}</p>
+    <p><strong>Alignment with User Profile:</strong> {{ analysis_data.alignment_with_user_profile }}</p>
+{% else %}
+    <p>{{ analysis_data.analysis }}</p>
+    <p><strong>Reason:</strong> {{ analysis_data.reason }}</p>
+{% endif %}
+
+<a href="{{ url_for('analysis_list', source=source, job_id=job_id) }}" class="btn btn-primary mt-3">Back to List</a>
 {% endblock %}
 
 ########## templates/job_results.html ##########
@@ -3453,7 +3847,7 @@ document.querySelectorAll('.view-analysis').forEach(button => {
 -- https://www.phpmyadmin.net/
 --
 -- Host: cranky-tu.87-106-159-152.plesk.page
--- Erstellungszeit: 25. Jun 2024 um 12:50
+-- Erstellungszeit: 25. Jun 2024 um 18:28
 -- Server-Version: 10.5.23-MariaDB-0+deb11u1
 -- PHP-Version: 8.2.8
 
@@ -3472,8 +3866,8 @@ SET time_zone = "+00:00";
 --
 
 CREATE TABLE `analysis_results` (
-  `id` int(11) NOT NULL,
-  `user_id` varchar(255) DEFAULT NULL,
+  `id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `topic` varchar(255) DEFAULT NULL,
   `subreddit` varchar(255) DEFAULT NULL,
   `post_id` varchar(255) DEFAULT NULL,
@@ -3481,7 +3875,7 @@ CREATE TABLE `analysis_results` (
   `analysis` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `business_model_title` varchar(255) DEFAULT NULL,
-  `job_id` int(11) DEFAULT NULL
+  `job_id` varchar(36) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
 
 -- --------------------------------------------------------
@@ -3493,7 +3887,7 @@ CREATE TABLE `analysis_results` (
 CREATE TABLE `api_request_logs` (
   `id` int(11) NOT NULL,
   `api_type` enum('reddit','openai') NOT NULL,
-  `user_id` varchar(255) DEFAULT NULL,
+  `user_id` varchar(36) NOT NULL,
   `openai_model` varchar(50) DEFAULT NULL,
   `openai_tokens_used` int(11) DEFAULT NULL,
   `reddit_requests_count` int(11) DEFAULT NULL,
@@ -3508,8 +3902,8 @@ CREATE TABLE `api_request_logs` (
 --
 
 CREATE TABLE `mass_analysis_jobs` (
-  `id` int(11) NOT NULL,
-  `user_id` varchar(255) NOT NULL,
+  `id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `subreddit` varchar(255) NOT NULL,
   `total_posts` int(11) NOT NULL,
   `completed_posts` int(11) DEFAULT 0,
@@ -3524,7 +3918,7 @@ CREATE TABLE `mass_analysis_jobs` (
 --
 
 CREATE TABLE `user_profiles` (
-  `user_id` varchar(255) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `educational_background` text DEFAULT NULL,
   `professional_experience` text DEFAULT NULL,
   `skills` text DEFAULT NULL,
@@ -3566,21 +3960,9 @@ ALTER TABLE `user_profiles`
 --
 
 --
--- AUTO_INCREMENT für Tabelle `analysis_results`
---
-ALTER TABLE `analysis_results`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
 -- AUTO_INCREMENT für Tabelle `api_request_logs`
 --
 ALTER TABLE `api_request_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT für Tabelle `mass_analysis_jobs`
---
-ALTER TABLE `mass_analysis_jobs`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 COMMIT;
 

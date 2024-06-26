@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: cranky-tu.87-106-159-152.plesk.page
--- Erstellungszeit: 25. Jun 2024 um 12:50
+-- Erstellungszeit: 25. Jun 2024 um 18:28
 -- Server-Version: 10.5.23-MariaDB-0+deb11u1
 -- PHP-Version: 8.2.8
 
@@ -22,8 +22,8 @@ SET time_zone = "+00:00";
 --
 
 CREATE TABLE `analysis_results` (
-  `id` int(11) NOT NULL,
-  `user_id` varchar(255) DEFAULT NULL,
+  `id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `topic` varchar(255) DEFAULT NULL,
   `subreddit` varchar(255) DEFAULT NULL,
   `post_id` varchar(255) DEFAULT NULL,
@@ -31,7 +31,7 @@ CREATE TABLE `analysis_results` (
   `analysis` text DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `business_model_title` varchar(255) DEFAULT NULL,
-  `job_id` int(11) DEFAULT NULL
+  `job_id` varchar(36) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_general_ci;
 
 -- --------------------------------------------------------
@@ -43,7 +43,7 @@ CREATE TABLE `analysis_results` (
 CREATE TABLE `api_request_logs` (
   `id` int(11) NOT NULL,
   `api_type` enum('reddit','openai') NOT NULL,
-  `user_id` varchar(255) DEFAULT NULL,
+  `user_id` varchar(36) NOT NULL,
   `openai_model` varchar(50) DEFAULT NULL,
   `openai_tokens_used` int(11) DEFAULT NULL,
   `reddit_requests_count` int(11) DEFAULT NULL,
@@ -58,8 +58,8 @@ CREATE TABLE `api_request_logs` (
 --
 
 CREATE TABLE `mass_analysis_jobs` (
-  `id` int(11) NOT NULL,
-  `user_id` varchar(255) NOT NULL,
+  `id` varchar(36) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `subreddit` varchar(255) NOT NULL,
   `total_posts` int(11) NOT NULL,
   `completed_posts` int(11) DEFAULT 0,
@@ -74,7 +74,7 @@ CREATE TABLE `mass_analysis_jobs` (
 --
 
 CREATE TABLE `user_profiles` (
-  `user_id` varchar(255) NOT NULL,
+  `user_id` varchar(36) NOT NULL,
   `educational_background` text DEFAULT NULL,
   `professional_experience` text DEFAULT NULL,
   `skills` text DEFAULT NULL,
@@ -116,20 +116,8 @@ ALTER TABLE `user_profiles`
 --
 
 --
--- AUTO_INCREMENT für Tabelle `analysis_results`
---
-ALTER TABLE `analysis_results`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
 -- AUTO_INCREMENT für Tabelle `api_request_logs`
 --
 ALTER TABLE `api_request_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT für Tabelle `mass_analysis_jobs`
---
-ALTER TABLE `mass_analysis_jobs`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 COMMIT;
