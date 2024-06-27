@@ -8,7 +8,7 @@ Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid 
 
 ########## __pycache__/app.cpython-39.pyc ##########
 
-Error reading file: 'utf-8' codec can't decode byte 0xc6 in position 8: invalid continuation byte
+Error reading file: 'utf-8' codec can't decode bytes in position 12-13: invalid continuation byte
 
 ########## __pycache__/app.cpython-311.pyc ##########
 
@@ -882,26 +882,26 @@ def create_db_connection():
     return None
 
 def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id=None):
+    # Check if it's a non-viable business model
+    if business_model_title == "No viable business model":
+        print(f"Skipping save for non-viable business model: {post_id}")
+        return None
+
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
-            analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
-            print(f"New analysis id: {analysis_id}")
+            analysis_id = str(uuid.uuid4())
             query = """INSERT INTO analysis_results 
                        (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
             values = (analysis_id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id)
-            print(f"Attempting to insert with values: {values}")  # Debug print
             cursor.execute(query, values)
             connection.commit()
-            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")  # Debug print
+            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")
             return analysis_id
         except mysql.connector.IntegrityError as e:
             print(f"IntegrityError: {e}")
-            print(f"Error code: {e.errno}")
-            print(f"SQL State: {e.sqlstate}")
-            print(f"Message: {e.msg}")
             if e.errno == 1062:  # Duplicate entry
                 # Try to update instead
                 update_query = """UPDATE analysis_results 
@@ -912,7 +912,7 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
                 cursor.execute(update_query, update_values)
                 connection.commit()
                 print(f"Updated existing analysis for user_id: {user_id}, post_id: {post_id}")
-                return post_id  # Return post_id as identifier for updated row
+                return post_id
         except Error as e:
             print(f"Error while saving analysis: {e}")
         finally:
@@ -1043,6 +1043,13 @@ def analyze_post():
     
     analysis = analyze_post_internal(post_id, topic, subreddit, user_id, job_id)
     
+    if analysis is None:
+        return jsonify({'analysis': json.dumps({
+            "business_model_title": "No viable business model",
+            "analysis": "No potential business model detected",
+            "reason": "The post did not contain a viable business opportunity."
+        })})
+    
     return jsonify({'analysis': analysis})
 
 
@@ -1109,6 +1116,12 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         
         analysis_json = json.loads(analysis)
         business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+        
+        # Check if it's a viable business model
+        if business_model_title == "No viable business model":
+            print(f"No viable business model detected for post {post_id}. Skipping database save.")
+            return analysis  # Return the analysis without saving to database
+        
     except json.JSONDecodeError:
         print(f"Error decoding JSON for post {post_id}: {analysis}")
         business_model_title = 'Error in Analysis'
@@ -1118,8 +1131,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         business_model_title = 'Error in Analysis'
         analysis = json.dumps({"error": "Unexpected error during analysis"})
 
-    # Save the analysis to the database
-    print(f"Saving analysis for post {post_id} with job ID {job_id}")  # Debug print
+    # Attempt to save the analysis
     analysis_id = save_analysis(
         user_id=user_id,
         topic=topic,
@@ -1277,16 +1289,20 @@ def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
     
     posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
     print(f"Found {len(posts)} unanalyzed posts")
+    viable_models = 0
     for i, post in enumerate(posts):
         try:
-            analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
-            update_job_progress(job_id, i + 1)
-            print(f"Analyzed post {i+1}/{len(posts)} for job {job_id}")
+            analysis = analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
+            analysis_json = json.loads(analysis)
+            if analysis_json.get('business_model_title') != "No viable business model":
+                viable_models += 1
+                update_job_progress(job_id, viable_models)
+            print(f"Processed post {i+1}/{len(posts)} for job {job_id}")
         except Exception as e:
             print(f"Error analyzing post {post.id} for job {job_id}: {str(e)}")
     
     update_job_status(job_id, 'completed')
-    print(f"Completed mass analysis for job {job_id}")
+    print(f"Completed mass analysis for job {job_id}. Found {viable_models} viable business models.")
 
 
 @app.route('/start_mass_analysis', methods=['POST'])
@@ -2008,7 +2024,7 @@ if __name__ == '__main__':
     <nav class="navbar navbar-light bg-light">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
-                <span class="logo-text">REDDIT BUSINESS MODEL ANALYZER</span>
+                <span class="logo-text">threadsight</span>
             </a>
             <button id="menuToggle" class="btn btn-primary menu-icon" aria-label="Toggle menu">
                 <span class="navbar-toggler-icon"></span>
@@ -2191,14 +2207,15 @@ document.getElementById('createFolderBtn').addEventListener('click', function() 
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            location.reload();  // Reload the page to show the new folder
+            showToast('Success', 'Folder created successfully', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to create folder. Please try again.');
+            showToast('Error', 'Failed to create folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 
@@ -2215,18 +2232,44 @@ document.getElementById('addToFolderBtn').addEventListener('click', function() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Successfully added analyses to folder.');
-            location.reload();
+            showToast('Success', 'Successfully added analyses to folder.', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to add analyses to folder. Please try again.');
+            showToast('Error', 'Failed to add analyses to folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 {% endif %}
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}
 </script>
 {% endblock %}
 
@@ -2368,7 +2411,7 @@ Error reading file: 'utf-8' codec can't decode byte 0xa7 in position 0: invalid 
 
 ########## __pycache__/app.cpython-39.pyc ##########
 
-Error reading file: 'utf-8' codec can't decode byte 0xc6 in position 8: invalid continuation byte
+Error reading file: 'utf-8' codec can't decode bytes in position 12-13: invalid continuation byte
 
 ########## __pycache__/app.cpython-311.pyc ##########
 
@@ -3242,26 +3285,26 @@ def create_db_connection():
     return None
 
 def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id=None):
+    # Check if it's a non-viable business model
+    if business_model_title == "No viable business model":
+        print(f"Skipping save for non-viable business model: {post_id}")
+        return None
+
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
-            analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
-            print(f"New analysis id: {analysis_id}")
+            analysis_id = str(uuid.uuid4())
             query = """INSERT INTO analysis_results 
                        (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
             values = (analysis_id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id)
-            print(f"Attempting to insert with values: {values}")  # Debug print
             cursor.execute(query, values)
             connection.commit()
-            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")  # Debug print
+            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")
             return analysis_id
         except mysql.connector.IntegrityError as e:
             print(f"IntegrityError: {e}")
-            print(f"Error code: {e.errno}")
-            print(f"SQL State: {e.sqlstate}")
-            print(f"Message: {e.msg}")
             if e.errno == 1062:  # Duplicate entry
                 # Try to update instead
                 update_query = """UPDATE analysis_results 
@@ -3272,7 +3315,7 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
                 cursor.execute(update_query, update_values)
                 connection.commit()
                 print(f"Updated existing analysis for user_id: {user_id}, post_id: {post_id}")
-                return post_id  # Return post_id as identifier for updated row
+                return post_id
         except Error as e:
             print(f"Error while saving analysis: {e}")
         finally:
@@ -3403,6 +3446,13 @@ def analyze_post():
     
     analysis = analyze_post_internal(post_id, topic, subreddit, user_id, job_id)
     
+    if analysis is None:
+        return jsonify({'analysis': json.dumps({
+            "business_model_title": "No viable business model",
+            "analysis": "No potential business model detected",
+            "reason": "The post did not contain a viable business opportunity."
+        })})
+    
     return jsonify({'analysis': analysis})
 
 
@@ -3469,6 +3519,12 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         
         analysis_json = json.loads(analysis)
         business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+        
+        # Check if it's a viable business model
+        if business_model_title == "No viable business model":
+            print(f"No viable business model detected for post {post_id}. Skipping database save.")
+            return analysis  # Return the analysis without saving to database
+        
     except json.JSONDecodeError:
         print(f"Error decoding JSON for post {post_id}: {analysis}")
         business_model_title = 'Error in Analysis'
@@ -3478,8 +3534,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         business_model_title = 'Error in Analysis'
         analysis = json.dumps({"error": "Unexpected error during analysis"})
 
-    # Save the analysis to the database
-    print(f"Saving analysis for post {post_id} with job ID {job_id}")  # Debug print
+    # Attempt to save the analysis
     analysis_id = save_analysis(
         user_id=user_id,
         topic=topic,
@@ -3637,16 +3692,20 @@ def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
     
     posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
     print(f"Found {len(posts)} unanalyzed posts")
+    viable_models = 0
     for i, post in enumerate(posts):
         try:
-            analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
-            update_job_progress(job_id, i + 1)
-            print(f"Analyzed post {i+1}/{len(posts)} for job {job_id}")
+            analysis = analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
+            analysis_json = json.loads(analysis)
+            if analysis_json.get('business_model_title') != "No viable business model":
+                viable_models += 1
+                update_job_progress(job_id, viable_models)
+            print(f"Processed post {i+1}/{len(posts)} for job {job_id}")
         except Exception as e:
             print(f"Error analyzing post {post.id} for job {job_id}: {str(e)}")
     
     update_job_status(job_id, 'completed')
-    print(f"Completed mass analysis for job {job_id}")
+    print(f"Completed mass analysis for job {job_id}. Found {viable_models} viable business models.")
 
 
 @app.route('/start_mass_analysis', methods=['POST'])
@@ -4368,7 +4427,7 @@ if __name__ == '__main__':
     <nav class="navbar navbar-light bg-light">
         <div class="container-fluid">
             <a class="navbar-brand" href="/">
-                <span class="logo-text">REDDIT BUSINESS MODEL ANALYZER</span>
+                <span class="logo-text">threadsight</span>
             </a>
             <button id="menuToggle" class="btn btn-primary menu-icon" aria-label="Toggle menu">
                 <span class="navbar-toggler-icon"></span>
@@ -4551,14 +4610,15 @@ document.getElementById('createFolderBtn').addEventListener('click', function() 
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            location.reload();  // Reload the page to show the new folder
+            showToast('Success', 'Folder created successfully', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to create folder. Please try again.');
+            showToast('Error', 'Failed to create folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 
@@ -4575,18 +4635,44 @@ document.getElementById('addToFolderBtn').addEventListener('click', function() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Successfully added analyses to folder.');
-            location.reload();
+            showToast('Success', 'Successfully added analyses to folder.', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to add analyses to folder. Please try again.');
+            showToast('Error', 'Failed to add analyses to folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 {% endif %}
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}
 </script>
 {% endblock %}
 

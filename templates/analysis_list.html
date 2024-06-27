@@ -5,7 +5,7 @@
 
 {% if not current_folder_id and not job_id %}
     <button type="button" class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#addFolderModal">
-        Add Folder
+        <i class="bi bi-folder-plus"></i> New Folder
     </button>
 {% endif %}
 
@@ -112,14 +112,15 @@ document.getElementById('createFolderBtn').addEventListener('click', function() 
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            location.reload();  // Reload the page to show the new folder
+            showToast('Success', 'Folder created successfully', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to create folder. Please try again.');
+            showToast('Error', 'Failed to create folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 
@@ -136,17 +137,43 @@ document.getElementById('addToFolderBtn').addEventListener('click', function() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Successfully added analyses to folder.');
-            location.reload();
+            showToast('Success', 'Successfully added analyses to folder.', 'success');
+            setTimeout(() => location.reload(), 2000);  // Reload after 2 seconds
         } else {
-            alert('Failed to add analyses to folder. Please try again.');
+            showToast('Error', 'Failed to add analyses to folder. Please try again.', 'danger');
         }
     })
     .catch(error => {
         console.error('Error:', error);
-        alert('An error occurred. Please try again.');
+        showToast('Error', 'An error occurred. Please try again.', 'danger');
     });
 });
 {% endif %}
+
+function showToast(title, message, type = 'info') {
+    const toastContainer = document.getElementById('toastContainer');
+    const toastId = 'toast-' + Date.now();
+    const toastHTML = `
+        <div id="${toastId}" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="toast-header">
+                <strong class="me-auto">${title}</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                ${message}
+            </div>
+        </div>
+    `;
+    toastContainer.insertAdjacentHTML('beforeend', toastHTML);
+    const toastElement = document.getElementById(toastId);
+    const toast = new bootstrap.Toast(toastElement);
+    toast.show();
+
+    // Optional: add a class based on the type for custom styling
+    toastElement.classList.add(`bg-${type}`);
+    if (type === 'danger' || type === 'success') {
+        toastElement.querySelector('.toast-body').classList.add('text-white');
+    }
+}
 </script>
 {% endblock %}

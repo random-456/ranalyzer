@@ -66,26 +66,26 @@ def create_db_connection():
     return None
 
 def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id=None):
+    # Check if it's a non-viable business model
+    if business_model_title == "No viable business model":
+        print(f"Skipping save for non-viable business model: {post_id}")
+        return None
+
     connection = create_db_connection()
     if connection:
         try:
             cursor = connection.cursor()
-            analysis_id = str(uuid.uuid4())  # Generate a new analysis_id
-            print(f"New analysis id: {analysis_id}")
+            analysis_id = str(uuid.uuid4())
             query = """INSERT INTO analysis_results 
                        (id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id) 
                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
             values = (analysis_id, user_id, topic, subreddit, post_id, post_title, analysis, business_model_title, job_id)
-            print(f"Attempting to insert with values: {values}")  # Debug print
             cursor.execute(query, values)
             connection.commit()
-            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")  # Debug print
+            print(f"Successfully saved analysis with ID: {analysis_id}, job_id: {job_id}")
             return analysis_id
         except mysql.connector.IntegrityError as e:
             print(f"IntegrityError: {e}")
-            print(f"Error code: {e.errno}")
-            print(f"SQL State: {e.sqlstate}")
-            print(f"Message: {e.msg}")
             if e.errno == 1062:  # Duplicate entry
                 # Try to update instead
                 update_query = """UPDATE analysis_results 
@@ -96,7 +96,7 @@ def save_analysis(user_id, topic, subreddit, post_id, post_title, analysis, busi
                 cursor.execute(update_query, update_values)
                 connection.commit()
                 print(f"Updated existing analysis for user_id: {user_id}, post_id: {post_id}")
-                return post_id  # Return post_id as identifier for updated row
+                return post_id
         except Error as e:
             print(f"Error while saving analysis: {e}")
         finally:
@@ -227,6 +227,13 @@ def analyze_post():
     
     analysis = analyze_post_internal(post_id, topic, subreddit, user_id, job_id)
     
+    if analysis is None:
+        return jsonify({'analysis': json.dumps({
+            "business_model_title": "No viable business model",
+            "analysis": "No potential business model detected",
+            "reason": "The post did not contain a viable business opportunity."
+        })})
+    
     return jsonify({'analysis': analysis})
 
 
@@ -293,6 +300,12 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         
         analysis_json = json.loads(analysis)
         business_model_title = analysis_json.get('business_model_title', 'Untitled Business Model')
+        
+        # Check if it's a viable business model
+        if business_model_title == "No viable business model":
+            print(f"No viable business model detected for post {post_id}. Skipping database save.")
+            return analysis  # Return the analysis without saving to database
+        
     except json.JSONDecodeError:
         print(f"Error decoding JSON for post {post_id}: {analysis}")
         business_model_title = 'Error in Analysis'
@@ -302,8 +315,7 @@ def analyze_post_internal(post_id, topic, subreddit, user_id, job_id=None):
         business_model_title = 'Error in Analysis'
         analysis = json.dumps({"error": "Unexpected error during analysis"})
 
-    # Save the analysis to the database
-    print(f"Saving analysis for post {post_id} with job ID {job_id}")  # Debug print
+    # Attempt to save the analysis
     analysis_id = save_analysis(
         user_id=user_id,
         topic=topic,
@@ -461,16 +473,20 @@ def perform_mass_analysis(self, job_id, user_id, subreddit, num_posts):
     
     posts = get_unanalyzed_posts(user_id, subreddit, num_posts)
     print(f"Found {len(posts)} unanalyzed posts")
+    viable_models = 0
     for i, post in enumerate(posts):
         try:
-            analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
-            update_job_progress(job_id, i + 1)
-            print(f"Analyzed post {i+1}/{len(posts)} for job {job_id}")
+            analysis = analyze_post_internal(post.id, '', subreddit, user_id, job_id=job_id)
+            analysis_json = json.loads(analysis)
+            if analysis_json.get('business_model_title') != "No viable business model":
+                viable_models += 1
+                update_job_progress(job_id, viable_models)
+            print(f"Processed post {i+1}/{len(posts)} for job {job_id}")
         except Exception as e:
             print(f"Error analyzing post {post.id} for job {job_id}: {str(e)}")
     
     update_job_status(job_id, 'completed')
-    print(f"Completed mass analysis for job {job_id}")
+    print(f"Completed mass analysis for job {job_id}. Found {viable_models} viable business models.")
 
 
 @app.route('/start_mass_analysis', methods=['POST'])
